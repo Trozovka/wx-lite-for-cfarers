@@ -2,6 +2,7 @@ package com.trozovka.wxlite.data
 
 import android.content.Context
 import android.util.Log
+import com.trozovka.wxlite.chart.Storm
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -15,8 +16,15 @@ import org.json.JSONObject
  * Network is only ever touched by sync(), an explicit action — the app
  * must be fully usable from whatever's already on disk with zero
  * connectivity, per spec.
+ *
+ * [tier] bounds both what's read AND what's fetched — this (public,
+ * free-tier) app never downloads paid-tier hours it's not licensed to
+ * show, not just hides them in the UI.
  */
-class ForecastRepository(private val context: Context) {
+class ForecastRepository(
+    private val context: Context,
+    private val tier: ForecastTier = ForecastTier.FREE,
+) {
     private val baseDir: File
         get() = File(context.filesDir, "weather").apply { mkdirs() }
 
@@ -42,6 +50,30 @@ class ForecastRepository(private val context: Context) {
         return runCatching { JSONObject(file.readText()) }.getOrNull()
     }
 
+    /** Parsed into plain Storm objects — org.json itself can't be unit
+     * tested outside Android (confirmed empirically, not assumed), so this
+     * parsing step is intentionally the thin, untested part; Storms.
+     * withinBounds is where the actual logic lives, and that is tested. */
+    fun cachedStormsList(): List<Storm> {
+        val json = cachedStorms() ?: return emptyList()
+        val active = json.optJSONArray("activeStorms") ?: return emptyList()
+        val result = ArrayList<Storm>(active.length())
+        for (i in 0 until active.length()) {
+            val s = active.optJSONObject(i) ?: continue
+            result.add(
+                Storm(
+                    id = s.optString("id"),
+                    name = s.optString("name"),
+                    classification = s.optString("classification"),
+                    pressureHpa = s.optString("pressure").toIntOrNull(),
+                    lat = s.optDouble("latitudeNumeric"),
+                    lon = s.optDouble("longitudeNumeric"),
+                ),
+            )
+        }
+        return result
+    }
+
     fun lastSyncedAtMillis(): Long {
         val file = File(baseDir, "manifest.json")
         return if (file.exists()) file.lastModified() else 0L
@@ -54,7 +86,7 @@ class ForecastRepository(private val context: Context) {
         val files = tile.optJSONObject("files") ?: return emptyList()
         return files.keys().asSequence().mapNotNull { it.toIntOrNull() }.filter {
             tileFilePath(tileId, it).exists()
-        }.sorted().toList()
+        }.sorted().toList().filterByTier(tier)
     }
 
     private fun tileFilePath(tileId: String, hour: Int): File =
@@ -96,6 +128,8 @@ class ForecastRepository(private val context: Context) {
         val keys = files.keys()
         while (keys.hasNext()) {
             val hourKey = keys.next()
+            val hour = hourKey.toIntOrNull()
+            if (hour == null || hour > tier.maxHour) continue // never fetch what this tier isn't licensed to show
             val fileName = files.getString(hourKey)
             val bytes = downloadBytes("$BASE_URL/$tileId/$fileName")
             File(tileDir, fileName).writeBytes(bytes)

@@ -16,14 +16,22 @@ import java.util.Locale
 /**
  * Skeleton screen exercising the real offline-first flow: saved location
  * -> tile lookup -> read from local cache -> explicit sync updates the
- * cache -> render. Everything shown here works with zero connectivity
- * except the Sync button itself, per spec.
+ * cache -> render, with a forecast-hour picker per spec's "bottom of the
+ * screen must have simple controls allowing selection of forecast
+ * date/time". Everything shown here works with zero connectivity except
+ * the Sync button itself.
  */
 class MainActivity : Activity() {
     private lateinit var locationStore: LocationStore
     private lateinit var repository: ForecastRepository
     private lateinit var statusView: TextView
     private lateinit var chartView: ChartCanvasView
+    private lateinit var hourLabel: TextView
+    private lateinit var prevHourBtn: Button
+    private lateinit var nextHourBtn: Button
+
+    private var availableHours: List<Int> = emptyList()
+    private var currentHourIndex: Int = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,8 +86,40 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 800),
         )
 
+        // Forecast date/time control, per spec — deliberately just two
+        // buttons and a label: "minimal buttons", bridge-use simplicity,
+        // not a calendar widget.
+        val hourControls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        prevHourBtn = Button(this).apply {
+            text = "< Earlier"
+            setOnClickListener { stepHour(-1) }
+        }
+        hourLabel = TextView(this).apply {
+            textSize = 14f
+            gravity = android.view.Gravity.CENTER
+        }
+        nextHourBtn = Button(this).apply {
+            text = "Later >"
+            setOnClickListener { stepHour(1) }
+        }
+        hourControls.addView(prevHourBtn)
+        hourControls.addView(
+            hourLabel,
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        hourControls.addView(nextHourBtn)
+        root.addView(hourControls)
+
         setContentView(root)
         refreshStatus()
+    }
+
+    private fun currentTileId(): String? = locationStore.get()?.let { Tiles.tileForPosition(it.lat, it.lon) }
+
+    private fun stepHour(delta: Int) {
+        if (availableHours.isEmpty()) return
+        currentHourIndex = (currentHourIndex + delta).coerceIn(0, availableHours.size - 1)
+        renderCurrentHour()
     }
 
     private fun refreshStatus() {
@@ -90,6 +130,8 @@ class MainActivity : Activity() {
         if (position == null) {
             sb.append("No ship location saved yet.\n")
             statusView.text = sb.toString()
+            availableHours = emptyList()
+            updateHourControlsEnabled()
             return
         }
 
@@ -99,12 +141,16 @@ class MainActivity : Activity() {
 
         if (tileId == null) {
             statusView.text = sb.toString()
+            availableHours = emptyList()
+            updateHourControlsEnabled()
             return
         }
 
-        val hours = repository.availableHours(tileId)
+        availableHours = repository.availableHours(tileId)
+        currentHourIndex = currentHourIndex.coerceIn(0, (availableHours.size - 1).coerceAtLeast(0))
+
         val lastSync = repository.lastSyncedAtMillis()
-        sb.append("Cached forecast hours: ${hours.size} (${hours.take(5)}${if (hours.size > 5) "..." else ""})\n")
+        sb.append("Cached forecast hours: ${availableHours.size}\n")
         sb.append(
             if (lastSync > 0) {
                 "Last synced: ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(lastSync))}\n"
@@ -114,11 +160,35 @@ class MainActivity : Activity() {
         )
         statusView.text = sb.toString()
 
-        // Render whatever's earliest in the cache — this is where the
-        // date/time picker described in the spec will eventually plug in.
-        val firstHour = hours.firstOrNull()
-        if (firstHour != null) {
-            repository.cachedFile(tileId, firstHour)?.let { chartView.setData(it) }
+        updateHourControlsEnabled()
+        renderCurrentHour()
+    }
+
+    private fun updateHourControlsEnabled() {
+        prevHourBtn.isEnabled = availableHours.isNotEmpty() && currentHourIndex > 0
+        nextHourBtn.isEnabled = availableHours.isNotEmpty() && currentHourIndex < availableHours.size - 1
+    }
+
+    private fun renderCurrentHour() {
+        val tileId = currentTileId()
+        if (tileId == null || availableHours.isEmpty()) {
+            hourLabel.text = "No data"
+            updateHourControlsEnabled()
+            return
         }
+
+        val hour = availableHours[currentHourIndex]
+        val file = repository.cachedFile(tileId, hour)
+        if (file != null) {
+            chartView.setData(file)
+            chartView.setStorms(repository.cachedStormsList())
+            val validDate = SimpleDateFormat("MMM d, HH:mm 'UTC'", Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }.format(Date(file.validTimeSeconds * 1000))
+            hourLabel.text = "+${hour}h — $validDate"
+        } else {
+            hourLabel.text = "+${hour}h (file missing)"
+        }
+        updateHourControlsEnabled()
     }
 }

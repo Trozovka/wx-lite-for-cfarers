@@ -25,6 +25,7 @@ class ChartCanvasView @JvmOverloads constructor(
 ) : View(context, attrs) {
 
     private var wxlFile: WxlFile? = null
+    private var storms: List<Storm> = emptyList()
 
     private val backgroundPaint = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
     private val isobarPaint = Paint().apply {
@@ -36,6 +37,12 @@ class ChartCanvasView @JvmOverloads constructor(
     private val windBarbPaint = Paint().apply {
         color = Color.BLACK; strokeWidth = 3f; style = Paint.Style.STROKE; isAntiAlias = true
     }
+    private val stormPaint = Paint().apply {
+        color = Color.BLACK; strokeWidth = 4f; style = Paint.Style.STROKE; isAntiAlias = true
+    }
+    private val stormLabelPaint = Paint().apply {
+        color = Color.BLACK; textSize = 32f; isAntiAlias = true; textAlign = Paint.Align.CENTER
+    }
 
     // Every Nth grid point gets a wind barb — one per isobar grid cell would
     // be far too dense to read.
@@ -44,6 +51,11 @@ class ChartCanvasView @JvmOverloads constructor(
 
     fun setData(file: WxlFile) {
         wxlFile = file
+        invalidate()
+    }
+
+    fun setStorms(allStorms: List<Storm>) {
+        storms = allStorms
         invalidate()
     }
 
@@ -64,6 +76,48 @@ class ChartCanvasView @JvmOverloads constructor(
         drawIsobars(canvas, file, ::screenX, ::screenY)
         drawPressureCenters(canvas, file, ::screenX, ::screenY)
         drawWindBarbs(canvas, file, ::screenX, ::screenY)
+        drawStorms(canvas, file, ::screenX, ::screenY)
+    }
+
+    private fun drawStorms(
+        canvas: Canvas,
+        file: WxlFile,
+        screenX: (Double) -> Float,
+        screenY: (Double) -> Float,
+    ) {
+        val visible = Storms.withinBounds(
+            storms,
+            latMin = file.latMin.toDouble(),
+            latMax = file.latMax.toDouble(),
+            lonMin = file.lonMin.toDouble(),
+            lonMax = file.lonMax.toDouble(),
+        )
+        val latSpan = file.latMax - file.latMin
+        val lonSpan = file.lonMax - file.lonMin
+        if (latSpan == 0f || lonSpan == 0f) return
+
+        for (storm in visible) {
+            val row = (storm.lat - file.latMin) / latSpan * (file.nLat - 1)
+            val col = (storm.lon - file.lonMin) / lonSpan * (file.nLon - 1)
+            val x = screenX(col)
+            val y = screenY(row)
+
+            // Simple distinguishing symbol: a circle with crossing spokes,
+            // the traditional tropical-cyclone chart mark — kept plain to
+            // match the monochrome weatherfax aesthetic, not a filled icon.
+            val r = 22f
+            canvas.drawCircle(x, y, r, stormPaint)
+            canvas.drawLine(x - r * 1.6f, y, x - r, y, stormPaint)
+            canvas.drawLine(x + r, y, x + r * 1.6f, y, stormPaint)
+            canvas.drawLine(x, y - r * 1.6f, x, y - r, stormPaint)
+            canvas.drawLine(x, y + r, x, y + r * 1.6f, stormPaint)
+
+            val label = buildString {
+                append(storm.name)
+                if (storm.pressureHpa != null) append(" ${storm.pressureHpa}hPa")
+            }
+            canvas.drawText(label, x, y + r * 2.2f, stormLabelPaint)
+        }
     }
 
     private fun drawIsobars(
