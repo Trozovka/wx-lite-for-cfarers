@@ -251,7 +251,7 @@ class MainActivity : Activity() {
         val tileId = currentTileId()
         if (tileId == null || availableHours.isEmpty()) {
             hourLabel.text = "No data"
-            mapView.setWindTiles(emptyList())
+            mapView.setTiles(emptyList())
             updateHourControlsEnabled()
             return
         }
@@ -262,7 +262,7 @@ class MainActivity : Activity() {
         // appears in a single tile-sized rectangle no matter how far the
         // map is panned.
         val tilesForHour = repository.cachedFilesForHour(hour)
-        mapView.setWindTiles(tilesForHour.values.toList())
+        mapView.setTiles(tilesForHour.values.toList())
 
         val file = tilesForHour[tileId]
         if (file != null) {

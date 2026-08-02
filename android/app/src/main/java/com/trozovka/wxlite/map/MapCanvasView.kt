@@ -12,6 +12,9 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import com.trozovka.wxlite.chart.Beaufort
+import com.trozovka.wxlite.chart.CenterType
+import com.trozovka.wxlite.chart.Isobars
+import com.trozovka.wxlite.chart.PressureCenters
 import com.trozovka.wxlite.chart.Storm
 import com.trozovka.wxlite.chart.Storms
 import com.trozovka.wxlite.chart.WindBarb
@@ -41,7 +44,7 @@ class MapCanvasView @JvmOverloads constructor(
     private var pendingCenter: Pair<Double, Double>? = null
 
     private var coastline: List<CoastlinePolygon>? = null
-    private var windTiles: List<WxlFile> = emptyList()
+    private var tiles: List<WxlFile> = emptyList()
     private var storms: List<Storm> = emptyList()
 
     private val backgroundPaint = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
@@ -52,6 +55,18 @@ class MapCanvasView @JvmOverloads constructor(
         color = Color.BLACK; strokeWidth = 3f; style = Paint.Style.STROKE; isAntiAlias = true
     }
     private val beaufortPaint = Paint().apply {
+        color = Color.BLACK; textSize = 22f; isAntiAlias = true; textAlign = Paint.Align.CENTER
+    }
+    private val isobarPaint = Paint().apply {
+        color = Color.BLACK; strokeWidth = 2f; style = Paint.Style.STROKE; isAntiAlias = true
+    }
+    private val isobarLabelPaint = Paint().apply {
+        color = Color.BLACK; textSize = 20f; isAntiAlias = true; textAlign = Paint.Align.CENTER
+    }
+    private val centerLabelPaint = Paint().apply {
+        color = Color.BLACK; textSize = 38f; isAntiAlias = true; textAlign = Paint.Align.CENTER
+    }
+    private val centerValuePaint = Paint().apply {
         color = Color.BLACK; textSize = 24f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
     private val stormPaint = Paint().apply {
@@ -61,24 +76,30 @@ class MapCanvasView @JvmOverloads constructor(
         color = Color.BLACK; textSize = 30f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
 
-    private val windBarbLengthPx = 36f
+    // Barbs were reported as "almost invisible" on a real device -- ~65%
+    // longer than the original 36px, and the Beaufort label is now placed
+    // beside the shaft (perpendicular offset) instead of directly below
+    // it, so the two no longer visually merge into e.g. "F4/".
+    private val windBarbLengthPx = 60f
+    private val beaufortLabelOffsetPx = 26f
 
     // Minimum on-screen spacing between wind barbs/Beaufort labels, in
     // pixels -- the stride actually used is derived from this and the
     // current zoom (see strideFor), so labels stay readable instead of
-    // piling up at low zoom or wastefully sparse at high zoom.
-    private val minLabelSpacingPx = 70.0
+    // piling up at low zoom or wastefully sparse at high zoom. Widened
+    // to match the longer barbs above.
+    private val minLabelSpacingPx = 90.0
 
     private val scaleDetector = ScaleGestureDetector(context, ScaleListener())
     private val panDetector = GestureDetector(context, PanListener())
 
-    /** Renders wind for every tile passed in -- callers should pass every
-     * cached tile for the selected hour, not just the tile nearest the
-     * ship, so panning shows wind data anywhere that's actually been
-     * synced (the "camera" here only decides what's visible, per the
+    /** Renders wind + pressure for every tile passed in -- callers should
+     * pass every cached tile for the selected hour, not just the tile
+     * nearest the ship, so panning shows data anywhere that's actually
+     * been synced (the "camera" here only decides what's visible, per the
      * world/viewport distinction; it doesn't limit what data exists). */
-    fun setWindTiles(tiles: List<WxlFile>) {
-        windTiles = tiles
+    fun setTiles(newTiles: List<WxlFile>) {
+        tiles = newTiles
         invalidate()
     }
 
@@ -141,8 +162,70 @@ class MapCanvasView @JvmOverloads constructor(
 
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), backgroundPaint)
         drawCoastline(canvas)
+        drawPressure(canvas)
         drawWind(canvas)
         drawStorms(canvas)
+    }
+
+    /** Converts a tile-local grid position (row/col, fractional) to a
+     * screen point, via the same lat/lon -> world -> screen path used for
+     * every other layer. Shared by isobars and pressure centers. */
+    private fun tileGridToScreen(file: WxlFile, row: Double, col: Double): Pair<Float, Float> {
+        val latSpan = file.latMax - file.latMin
+        val lonSpan = file.lonMax - file.lonMin
+        val lat = file.latMin + latSpan * row / (file.nLat - 1)
+        val lon = file.lonMin + lonSpan * col / (file.nLon - 1)
+        val (worldX, worldY) = worldOf(lat.toDouble(), lon.toDouble())
+        val (sx, sy) = transform.worldToScreen(worldX, worldY)
+        return Pair(sx.toFloat(), sy.toFloat())
+    }
+
+    private fun drawPressure(canvas: Canvas) {
+        for (file in tiles) {
+            drawIsobars(canvas, file)
+            drawPressureCenters(canvas, file)
+        }
+    }
+
+    private fun drawIsobars(canvas: Canvas, file: WxlFile) {
+        if (file.nLat < 2 || file.nLon < 2) return
+        val segments = Isobars.generate(file.pressureGrid(), intervalHpa = 4.0)
+
+        for (seg in segments) {
+            val (x1, y1) = tileGridToScreen(file, seg.p1.row, seg.p1.col)
+            val (x2, y2) = tileGridToScreen(file, seg.p2.row, seg.p2.col)
+            canvas.drawLine(x1, y1, x2, y2, isobarPaint)
+        }
+
+        // Label every second contour (every 8 hPa, not every 4) at one
+        // representative segment's midpoint, rather than repeating the
+        // value along the whole line -- keeps the value readable without
+        // the clutter of stamping it on every segment.
+        val byLevel = segments.groupBy { it.levelHpa }
+        for ((level, segsForLevel) in byLevel) {
+            if (Math.round(level / 4.0) % 2 != 0L) continue
+            val anchor = segsForLevel[segsForLevel.size / 2]
+            val midRow = (anchor.p1.row + anchor.p2.row) / 2.0
+            val midCol = (anchor.p1.col + anchor.p2.col) / 2.0
+            val (lx, ly) = tileGridToScreen(file, midRow, midCol)
+            canvas.drawText(level.toInt().toString(), lx, ly, isobarLabelPaint)
+        }
+    }
+
+    private fun drawPressureCenters(canvas: Canvas, file: WxlFile) {
+        if (file.nLat < 2 || file.nLon < 2) return
+        val centers = PressureCenters.find(file.pressureGrid())
+        for (center in centers) {
+            val (x, y) = tileGridToScreen(file, center.row.toDouble(), center.col.toDouble())
+            val label = if (center.type == CenterType.HIGH) "H" else "L"
+            canvas.drawText(label, x, y, centerLabelPaint)
+            canvas.drawText(
+                center.valueHpa.toInt().toString(),
+                x,
+                y + centerLabelPaint.textSize * 0.8f,
+                centerValuePaint,
+            )
+        }
     }
 
     private fun drawCoastline(canvas: Canvas) {
@@ -160,15 +243,13 @@ class MapCanvasView @JvmOverloads constructor(
     }
 
     private fun drawWind(canvas: Canvas) {
-        for (file in windTiles) {
+        for (file in tiles) {
             drawWindTile(canvas, file)
         }
     }
 
     private fun drawWindTile(canvas: Canvas, file: WxlFile) {
         if (file.nLat < 2 || file.nLon < 2) return
-        val latSpan = file.latMax - file.latMin
-        val lonSpan = file.lonMax - file.lonMin
         val stride = strideFor(file)
 
         var row = 0
@@ -176,16 +257,11 @@ class MapCanvasView @JvmOverloads constructor(
             var col = 0
             while (col < file.nLon) {
                 val point = file.pointAt(row, col)
-                val lat = file.latMin + latSpan * row / (file.nLat - 1)
-                val lon = file.lonMin + lonSpan * col / (file.nLon - 1)
-                val (worldX, worldY) = worldOf(lat.toDouble(), lon.toDouble())
-                val (sx, sy) = transform.worldToScreen(worldX, worldY)
+                val (sx, sy) = tileGridToScreen(file, row.toDouble(), col.toDouble())
 
                 val barb = WindBarb.fromComponents(point.windU.toDouble(), point.windV.toDouble())
-                drawSingleBarb(canvas, sx.toFloat(), sy.toFloat(), barb)
-
                 val force = Beaufort.forceForKnots(barb.speedKnots.toDouble())
-                canvas.drawText("F$force", sx.toFloat(), sy.toFloat() + beaufortPaint.textSize + 12f, beaufortPaint)
+                drawSingleBarb(canvas, sx, sy, barb, "F$force")
 
                 col += stride
             }
@@ -204,9 +280,10 @@ class MapCanvasView @JvmOverloads constructor(
         return rawStride.toInt().coerceAtLeast(1)
     }
 
-    private fun drawSingleBarb(canvas: Canvas, cx: Float, cy: Float, barb: WindBarbSymbol) {
+    private fun drawSingleBarb(canvas: Canvas, cx: Float, cy: Float, barb: WindBarbSymbol, forceLabel: String) {
         if (barb.isCalm) {
             canvas.drawCircle(cx, cy, 5f, windBarbPaint)
+            canvas.drawText(forceLabel, cx, cy + beaufortPaint.textSize + 14f, beaufortPaint)
             return
         }
 
@@ -220,6 +297,18 @@ class MapCanvasView @JvmOverloads constructor(
 
         val perpDx = -dy
         val perpDy = dx
+
+        // Beaufort label sits beside the shaft (perpendicular offset), not
+        // below the center point -- on a real device the two previously
+        // merged into unreadable text like "F4/" for barbs pointing
+        // downward, since the label sat directly on the shaft's own line.
+        canvas.drawText(
+            forceLabel,
+            cx + perpDx * beaufortLabelOffsetPx,
+            cy + perpDy * beaufortLabelOffsetPx,
+            beaufortPaint,
+        )
+
         var offset = 0f
         val step = 7f
 
