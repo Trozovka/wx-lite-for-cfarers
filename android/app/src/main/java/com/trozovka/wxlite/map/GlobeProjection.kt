@@ -1,7 +1,10 @@
 package com.trozovka.wxlite.map
 
+import kotlin.math.asin
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 data class ProjectedPoint(val x: Double, val y: Double)
 
@@ -38,5 +41,23 @@ object GlobeProjection {
         val x = radius * cos(lat) * sin(lon)
         val y = -radius * sin(lat) // negated: screen Y grows downward, north should render up
         return ProjectedPoint(x, y)
+    }
+
+    /**
+     * Inverse of [project], for an equatorial-centered orthographic view
+     * (lat0 = 0 — matches project's lack of a centerLat parameter).
+     * Standard inverse-orthographic formulas (Snyder), adapted for our
+     * negated screen Y. Null if the tap fell outside the globe's disc.
+     */
+    fun unproject(xScreen: Double, yScreen: Double, centerLonDeg: Double, radius: Double): LatLon? {
+        val rho = sqrt(xScreen * xScreen + yScreen * yScreen)
+        if (rho > radius) return null
+        if (rho < 1e-9) return LatLon(0.0, centerLonDeg)
+
+        val yStandard = -yScreen
+        val c = asin((rho / radius).coerceIn(-1.0, 1.0))
+        val lat = asin((yStandard * sin(c) / rho).coerceIn(-1.0, 1.0))
+        val lon = centerLonDeg + Math.toDegrees(atan2(xScreen * sin(c), rho * cos(c)))
+        return LatLon(Math.toDegrees(lat), lon)
     }
 }

@@ -57,4 +57,40 @@ class GlobeProjectionTest {
         val p = GlobeProjection.project(latDeg = 0.0, lonDeg = 80.0, centerLonDeg = 0.0, radius)
         assertNotNull(p)
     }
+
+    @Test
+    fun `unproject recovers the original lat-lon for a visible point (round trip)`() {
+        val originalLat = 25.0
+        val originalLon = 40.0
+        val centerLon = 10.0
+        val p = GlobeProjection.project(originalLat, originalLon, centerLon, radius)
+        assertNotNull(p)
+
+        val recovered = GlobeProjection.unproject(p!!.x, p.y, centerLon, radius)
+        assertNotNull(recovered)
+        assertEquals(originalLat, recovered!!.lat, 0.01)
+        assertEquals(originalLon, recovered.lon, 0.01)
+    }
+
+    @Test
+    fun `unproject at the exact globe center returns center lat 0 and center lon`() {
+        val recovered = GlobeProjection.unproject(0.0, 0.0, centerLonDeg = 75.0, radius)
+        assertNotNull(recovered)
+        assertEquals(0.0, recovered!!.lat, 0.001)
+        assertEquals(75.0, recovered.lon, 0.001)
+    }
+
+    @Test
+    fun `unproject returns null for a tap outside the globe's disc`() {
+        val recovered = GlobeProjection.unproject(radius * 1.5, 0.0, centerLonDeg = 0.0, radius)
+        assertNull(recovered)
+    }
+
+    @Test
+    fun `unproject at the exact globe edge recovers a point 90 degrees from center`() {
+        val recovered = GlobeProjection.unproject(radius, 0.0, centerLonDeg = 0.0, radius)
+        assertNotNull(recovered)
+        assertEquals(0.0, recovered!!.lat, 0.01)
+        assertEquals(90.0, recovered.lon, 0.01)
+    }
 }

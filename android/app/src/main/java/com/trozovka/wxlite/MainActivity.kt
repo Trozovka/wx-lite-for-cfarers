@@ -2,13 +2,17 @@ package com.trozovka.wxlite
 
 import android.app.Activity
 import android.os.Bundle
+import android.text.InputType
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import com.trozovka.wxlite.chart.ChartCanvasView
 import com.trozovka.wxlite.data.ForecastRepository
 import com.trozovka.wxlite.data.LocationStore
 import com.trozovka.wxlite.data.Tiles
+import com.trozovka.wxlite.map.GlobeView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -29,6 +33,9 @@ class MainActivity : Activity() {
     private lateinit var hourLabel: TextView
     private lateinit var prevHourBtn: Button
     private lateinit var nextHourBtn: Button
+    private lateinit var globeView: GlobeView
+    private lateinit var latInput: EditText
+    private lateinit var lonInput: EditText
 
     private var availableHours: List<Int> = emptyList()
     private var currentHourIndex: Int = 0
@@ -49,12 +56,49 @@ class MainActivity : Activity() {
 
         val setTestLocationBtn = Button(this).apply {
             text = "Use test location (Manila)"
-            setOnClickListener {
-                locationStore.save(14.6, 121.0)
-                refreshStatus()
-            }
+            setOnClickListener { setLocation(14.6, 121.0) }
         }
         root.addView(setTestLocationBtn)
+
+        // World-overview globe, per spec's map-view requirement — tapping
+        // it sets the ship's saved location directly, no separate mode.
+        globeView = GlobeView(this).apply {
+            onLocationTapped = { lat, lon -> setLocation(lat, lon) }
+        }
+        root.addView(
+            globeView,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 600),
+        )
+
+        // Manual lat/lon entry, per spec — bridge crew may know their exact
+        // position and shouldn't be forced to tap a small globe for it.
+        val manualEntryRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        latInput = EditText(this).apply {
+            hint = "Lat"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or
+                InputType.TYPE_NUMBER_FLAG_SIGNED
+        }
+        lonInput = EditText(this).apply {
+            hint = "Lon"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or
+                InputType.TYPE_NUMBER_FLAG_SIGNED
+        }
+        val setManualLocationBtn = Button(this).apply {
+            text = "Set"
+            setOnClickListener {
+                val lat = latInput.text.toString().toDoubleOrNull()
+                val lon = lonInput.text.toString().toDoubleOrNull()
+                if (lat == null || lon == null || lat !in -90.0..90.0 || lon !in -180.0..180.0) {
+                    Toast.makeText(this@MainActivity, "Enter a valid lat (-90..90) and lon (-180..180)", Toast.LENGTH_SHORT).show()
+                } else {
+                    setLocation(lat, lon)
+                }
+            }
+        }
+        manualEntryRow.addView(latInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        manualEntryRow.addView(lonInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        manualEntryRow.addView(setManualLocationBtn)
+        root.addView(manualEntryRow)
 
         val syncBtn = Button(this).apply {
             text = "Sync now"
@@ -116,6 +160,11 @@ class MainActivity : Activity() {
 
     private fun currentTileId(): String? = locationStore.get()?.let { Tiles.tileForPosition(it.lat, it.lon) }
 
+    private fun setLocation(lat: Double, lon: Double) {
+        locationStore.save(lat, lon)
+        refreshStatus()
+    }
+
     private fun stepHour(delta: Int) {
         if (availableHours.isEmpty()) return
         currentHourIndex = (currentHourIndex + delta).coerceIn(0, availableHours.size - 1)
@@ -131,9 +180,13 @@ class MainActivity : Activity() {
             sb.append("No ship location saved yet.\n")
             statusView.text = sb.toString()
             availableHours = emptyList()
+            globeView.setShipPosition(null, null)
             updateHourControlsEnabled()
             return
         }
+
+        globeView.setShipPosition(position.lat, position.lon)
+        globeView.centerLonDeg = position.lon
 
         val tileId = Tiles.tileForPosition(position.lat, position.lon)
         sb.append("Ship position: ${position.lat}, ${position.lon}\n")
