@@ -1,0 +1,129 @@
+package com.trozovka.wxlite.data
+
+import android.content.Context
+import android.util.Log
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
+import org.json.JSONObject
+
+/**
+ * Offline-first: every read goes to local disk (app-private internal
+ * storage, not cacheDir — cacheDir can be cleared by the OS under storage
+ * pressure, which would violate "store the complete forecast offline").
+ * Network is only ever touched by sync(), an explicit action — the app
+ * must be fully usable from whatever's already on disk with zero
+ * connectivity, per spec.
+ */
+class ForecastRepository(private val context: Context) {
+    private val baseDir: File
+        get() = File(context.filesDir, "weather").apply { mkdirs() }
+
+    private val executor = Executors.newSingleThreadExecutor()
+
+    // ---------- offline reads ----------
+
+    fun cachedManifest(): JSONObject? {
+        val file = File(baseDir, "manifest.json")
+        if (!file.exists()) return null
+        return runCatching { JSONObject(file.readText()) }.getOrNull()
+    }
+
+    fun cachedFile(tileId: String, hour: Int): WxlFile? {
+        val file = tileFilePath(tileId, hour)
+        if (!file.exists()) return null
+        return runCatching { WxlFile.parse(file.readBytes()) }.getOrNull()
+    }
+
+    fun cachedStorms(): JSONObject? {
+        val file = File(baseDir, "storms.json")
+        if (!file.exists()) return null
+        return runCatching { JSONObject(file.readText()) }.getOrNull()
+    }
+
+    fun lastSyncedAtMillis(): Long {
+        val file = File(baseDir, "manifest.json")
+        return if (file.exists()) file.lastModified() else 0L
+    }
+
+    /** Which forecast hours are actually on disk for this tile right now. */
+    fun availableHours(tileId: String): List<Int> {
+        val manifest = cachedManifest() ?: return emptyList()
+        val tile = manifest.optJSONObject("tiles")?.optJSONObject(tileId) ?: return emptyList()
+        val files = tile.optJSONObject("files") ?: return emptyList()
+        return files.keys().asSequence().mapNotNull { it.toIntOrNull() }.filter {
+            tileFilePath(tileId, it).exists()
+        }.sorted().toList()
+    }
+
+    private fun tileFilePath(tileId: String, hour: Int): File =
+        File(baseDir, "$tileId/f${"%03d".format(hour)}.wxl")
+
+    // ---------- sync (network — the only place this class touches it) ----------
+
+    sealed class SyncResult {
+        data class Success(val filesDownloaded: Int) : SyncResult()
+        data class Failure(val message: String) : SyncResult()
+    }
+
+    /** Runs on a background thread; callback fires back on that same
+     * background thread — caller is responsible for posting to the UI
+     * thread if it touches views. */
+    fun sync(tileId: String, callback: (SyncResult) -> Unit) {
+        executor.execute {
+            try {
+                val result = syncBlocking(tileId)
+                callback(result)
+            } catch (e: Exception) {
+                Log.w(TAG, "Sync failed", e)
+                callback(SyncResult.Failure(e.message ?: "Unknown error"))
+            }
+        }
+    }
+
+    private fun syncBlocking(tileId: String): SyncResult {
+        val manifestBytes = downloadBytes("$BASE_URL/manifest.json")
+        val manifest = JSONObject(String(manifestBytes))
+        File(baseDir, "manifest.json").writeBytes(manifestBytes)
+
+        val tile = manifest.optJSONObject("tiles")?.optJSONObject(tileId)
+            ?: return SyncResult.Failure("Tile $tileId not in published manifest")
+        val files = tile.optJSONObject("files") ?: return SyncResult.Failure("No files listed for $tileId")
+
+        val tileDir = File(baseDir, tileId).apply { mkdirs() }
+        var downloaded = 0
+        val keys = files.keys()
+        while (keys.hasNext()) {
+            val hourKey = keys.next()
+            val fileName = files.getString(hourKey)
+            val bytes = downloadBytes("$BASE_URL/$tileId/$fileName")
+            File(tileDir, fileName).writeBytes(bytes)
+            downloaded++
+        }
+
+        runCatching {
+            val storms = downloadBytes("$BASE_URL/storms.json")
+            File(baseDir, "storms.json").writeBytes(storms)
+        }
+
+        return SyncResult.Success(downloaded)
+    }
+
+    private fun downloadBytes(url: String): ByteArray {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.connectTimeout = 15_000
+        connection.readTimeout = 15_000
+        try {
+            check(connection.responseCode == 200) { "HTTP ${connection.responseCode} for $url" }
+            return connection.inputStream.readBytes()
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    companion object {
+        private const val TAG = "ForecastRepository"
+        private const val BASE_URL = "https://trozovka.github.io/wx-lite-for-cfarers"
+    }
+}
