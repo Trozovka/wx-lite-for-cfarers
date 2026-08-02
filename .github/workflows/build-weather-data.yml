@@ -1,0 +1,53 @@
+name: Build weather data
+
+# GFS runs at 00/06/12/18 UTC and is typically available ~3.5-4.5h later;
+# scheduled 30min past to leave margin. Public repo = unlimited free
+# Actions minutes, so the ~30-45min full build (24 tiles x 27 hours,
+# rate-limited to NOMADS) isn't a cost concern.
+on:
+  schedule:
+    - cron: "30 4,10,16,22 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Build weather data
+        run: python backend/build.py --output backend/output
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: backend/output
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
