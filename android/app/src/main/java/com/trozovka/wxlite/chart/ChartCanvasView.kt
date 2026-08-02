@@ -49,11 +49,19 @@ class ChartCanvasView @JvmOverloads constructor(
     private val coastlinePaint = Paint().apply {
         color = Color.rgb(120, 120, 120); strokeWidth = 2f; style = Paint.Style.STROKE; isAntiAlias = true
     }
+    private val temperaturePaint = Paint().apply {
+        color = Color.BLACK; textSize = 26f; isAntiAlias = true; textAlign = Paint.Align.CENTER
+    }
 
     // Every Nth grid point gets a wind barb — one per isobar grid cell would
     // be far too dense to read.
     private val windBarbStride = 3
     private val windBarbLengthPx = 40f
+
+    // Temperature values are sparser than wind barbs (2x the stride) — per
+    // spec 17.4 ("simple readable values"), not full-density coverage,
+    // which would clutter the chart.
+    private val temperatureStride = windBarbStride * 2
 
     // Loaded lazily from assets on first draw — static data, read once,
     // not on every frame.
@@ -98,7 +106,30 @@ class ChartCanvasView @JvmOverloads constructor(
         drawIsobars(canvas, file, ::screenX, ::screenY)
         drawPressureCenters(canvas, file, ::screenX, ::screenY)
         drawWindBarbs(canvas, file, ::screenX, ::screenY)
+        drawTemperatures(canvas, file, ::screenX, ::screenY)
         drawStorms(canvas, file, ::screenX, ::screenY)
+    }
+
+    private fun drawTemperatures(
+        canvas: Canvas,
+        file: WxlFile,
+        screenX: (Double) -> Float,
+        screenY: (Double) -> Float,
+    ) {
+        var row = 0
+        while (row < file.nLat) {
+            var col = 0
+            while (col < file.nLon) {
+                val point = file.pointAt(row, col)
+                val x = screenX(col.toDouble())
+                // Offset below the wind barb/isobar clutter at this point
+                // rather than drawing directly on top of it.
+                val y = screenY(row.toDouble()) + temperaturePaint.textSize + 14f
+                canvas.drawText("${point.tempC}°", x, y, temperaturePaint)
+                col += temperatureStride
+            }
+            row += temperatureStride
+        }
     }
 
     private fun drawCoastline(
