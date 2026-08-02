@@ -36,4 +36,21 @@ object Tiles {
 
         return "lat${tileLat}_lon${tileLon}"
     }
+
+    /** Every tile ID in the grid, in the same order backend/tiles.py's
+     * all_tiles() generates them -- lets the app fetch full world coverage
+     * in one explicit action rather than one tile at a time. */
+    fun allTileIds(): List<String> {
+        val ids = mutableListOf<String>()
+        var lat = LAT_RANGE.first
+        while (lat < LAT_RANGE.last) {
+            var lon = LON_RANGE.first
+            while (lon < LON_RANGE.last) {
+                ids.add("lat${lat}_lon${lon}")
+                lon += TILE_LON_SIZE
+            }
+            lat += TILE_LAT_SIZE
+        }
+        return ids
+    }
 }

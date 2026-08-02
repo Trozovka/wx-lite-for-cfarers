@@ -95,6 +95,14 @@ class ForecastRepository(
         return result
     }
 
+    /** Every forecast hour cached for ANY synced tile, unioned and sorted --
+     * the time slider browses the whole world's data, not just the tile
+     * containing the ship's own saved position, so it shouldn't require a
+     * location to be set at all. Every tile is synced under the same tier
+     * limit already, so this can't leak paid-tier hours either way. */
+    fun availableHoursAnyTile(): List<Int> =
+        cachedTileIds().flatMap { availableHours(it) }.distinct().sorted()
+
     /** Which forecast hours are actually on disk for this tile right now. */
     fun availableHours(tileId: String): List<Int> {
         val manifest = cachedManifest() ?: return emptyList()

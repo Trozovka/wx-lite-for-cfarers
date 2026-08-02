@@ -96,57 +96,37 @@ class MainActivity : Activity() {
         latLonRow.addView(setLocationBtn)
         topPanel.addView(latLonRow)
 
+        // Syncs every tile in the world grid -- the forecast is worldwide,
+        // not tied to wherever the lat/lon fields happen to point, since a
+        // seafarer based in the Philippines but currently in Europe still
+        // wants to check weather back home. Still a single explicit,
+        // user-triggered action (no auto-fetch), just fetching everything
+        // instead of one region at a time.
         val syncBtn = Button(this).apply {
             text = "Sync now"
             setOnClickListener {
-                text = "Syncing..."
                 isEnabled = false
-                val position = locationStore.get()
-                val tileId = position?.let { Tiles.tileForPosition(it.lat, it.lon) }
-                if (tileId == null) {
-                    statusView.text = "Set a location first."
-                    text = "Sync now"
-                    isEnabled = true
-                } else {
+                val allTileIds = Tiles.allTileIds()
+                val total = allTileIds.size
+                var completed = 0
+                text = "Syncing 0/$total..."
+                for (tileId in allTileIds) {
                     repository.sync(tileId) {
                         runOnUiThread {
-                            text = "Sync now"
-                            isEnabled = true
-                            refreshStatus()
+                            completed++
+                            if (completed < total) {
+                                text = "Syncing $completed/$total..."
+                            } else {
+                                text = "Sync now"
+                                isEnabled = true
+                                refreshStatus()
+                            }
                         }
                     }
                 }
             }
         }
         topPanel.addView(syncBtn)
-
-        // Syncs whichever tile the map is currently centered on, which can
-        // be far from the saved ship location after panning -- lets
-        // coverage be built up by panning + tapping instead of typing
-        // coordinates for every region of interest.
-        val syncAreaBtn = Button(this).apply {
-            text = "Sync this area"
-            setOnClickListener {
-                text = "Syncing area..."
-                isEnabled = false
-                val (lat, lon) = mapView.currentCenterLatLon()
-                val tileId = Tiles.tileForPosition(lat, lon)
-                if (tileId == null) {
-                    Toast.makeText(this@MainActivity, "Current map view is outside covered range (60°S-60°N).", Toast.LENGTH_SHORT).show()
-                    text = "Sync this area"
-                    isEnabled = true
-                } else {
-                    repository.sync(tileId) {
-                        runOnUiThread {
-                            text = "Sync this area"
-                            isEnabled = true
-                            renderCurrentHour()
-                        }
-                    }
-                }
-            }
-        }
-        topPanel.addView(syncAreaBtn)
 
         statusView = TextView(this).apply { textSize = 12f }
         topPanel.addView(statusView)
@@ -160,26 +140,34 @@ class MainActivity : Activity() {
 
         // Bottom: forecast date/time, the sole bottom control per spec —
         // lat/lon now lives in topPanel instead of a four-field bottom row.
+        // The label gets its own full-width row (not squeezed between the
+        // two buttons horizontally) -- in portrait, the buttons previously
+        // left so little width that the date/time string wrapped and cut
+        // off mid-word (e.g. "UTC"); a full-width row can't do that on any
+        // orientation.
         val bottomBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = LinearLayout.VERTICAL
             setPadding(16, 16, 16, 32)
             setBackgroundColor(Color.argb(200, 255, 255, 255))
-        }
-        prevHourBtn = Button(this).apply {
-            text = "< Earlier"
-            setOnClickListener { stepHour(-1) }
         }
         hourLabel = TextView(this).apply {
             textSize = 14f
             gravity = Gravity.CENTER
         }
+        bottomBar.addView(hourLabel, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+        val hourButtonsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        prevHourBtn = Button(this).apply {
+            text = "< Earlier"
+            setOnClickListener { stepHour(-1) }
+        }
         nextHourBtn = Button(this).apply {
             text = "Later >"
             setOnClickListener { stepHour(1) }
         }
-        bottomBar.addView(prevHourBtn)
-        bottomBar.addView(hourLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        bottomBar.addView(nextHourBtn)
+        hourButtonsRow.addView(prevHourBtn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        hourButtonsRow.addView(nextHourBtn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        bottomBar.addView(hourButtonsRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         root.addView(
             bottomBar,
@@ -191,8 +179,6 @@ class MainActivity : Activity() {
         setContentView(root)
         refreshStatus()
     }
-
-    private fun currentTileId(): String? = locationStore.get()?.let { Tiles.tileForPosition(it.lat, it.lon) }
 
     private fun setLocation(lat: Double, lon: Double) {
         locationStore.save(lat, lon)
@@ -207,25 +193,16 @@ class MainActivity : Activity() {
 
     private fun refreshStatus() {
         val position = locationStore.get()
+        mapView.setMarker(position?.lat, position?.lon)
 
-        if (position == null) {
-            statusView.text = "No ship location saved yet."
-            availableHours = emptyList()
-            updateHourControlsEnabled()
-            return
+        // Forecast browsing (hours, wind/pressure tiles) is worldwide and
+        // doesn't require a saved location at all -- only the marker and
+        // the initial camera position do.
+        if (position != null) {
+            mapView.centerOn(position.lat, position.lon)
         }
 
-        mapView.centerOn(position.lat, position.lon)
-
-        val tileId = Tiles.tileForPosition(position.lat, position.lon)
-        if (tileId == null) {
-            statusView.text = "Position ${position.lat}, ${position.lon} — out of covered range."
-            availableHours = emptyList()
-            updateHourControlsEnabled()
-            return
-        }
-
-        availableHours = repository.availableHours(tileId)
+        availableHours = repository.availableHoursAnyTile()
         currentHourIndex = currentHourIndex.coerceIn(0, (availableHours.size - 1).coerceAtLeast(0))
 
         val lastSync = repository.lastSyncedAtMillis()
@@ -234,7 +211,9 @@ class MainActivity : Activity() {
         } else {
             "never"
         }
-        statusView.text = "Tile: $tileId | Cached: ${availableHours.size}h | Synced: $syncText"
+        val positionText = if (position != null) "Marker: ${position.lat}, ${position.lon} | " else ""
+        statusView.text = "${positionText}Cached tiles: ${repository.cachedTileIds().size}/24 | " +
+            "Hours: ${availableHours.size} | Synced: $syncText"
 
         mapView.setStorms(repository.cachedStormsList())
 
@@ -248,27 +227,26 @@ class MainActivity : Activity() {
     }
 
     private fun renderCurrentHour() {
-        val tileId = currentTileId()
-        if (tileId == null || availableHours.isEmpty()) {
-            hourLabel.text = "No data"
+        if (availableHours.isEmpty()) {
+            hourLabel.text = "No data — tap Sync now"
             mapView.setTiles(emptyList())
             updateHourControlsEnabled()
             return
         }
 
         val hour = availableHours[currentHourIndex]
-        // Render every tile that's been synced for this hour, not just the
-        // one containing the current lat/lon -- otherwise wind only ever
-        // appears in a single tile-sized rectangle no matter how far the
-        // map is panned.
+        // Render every tile that's been synced for this hour, across the
+        // whole world, not just whichever tile the lat/lon fields point to.
         val tilesForHour = repository.cachedFilesForHour(hour)
         mapView.setTiles(tilesForHour.values.toList())
 
-        val file = tilesForHour[tileId]
-        if (file != null) {
+        // Every tile for a given hour shares the same forecast valid time
+        // (same run), so any one of them gives the right date/time label.
+        val anyFile = tilesForHour.values.firstOrNull()
+        if (anyFile != null) {
             val validDate = SimpleDateFormat("MMM d, HH:mm 'UTC'", Locale.US).apply {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
-            }.format(Date(file.validTimeSeconds * 1000))
+            }.format(Date(anyFile.validTimeSeconds * 1000))
             hourLabel.text = "+${hour}h — $validDate"
         } else {
             hourLabel.text = "+${hour}h (file missing)"

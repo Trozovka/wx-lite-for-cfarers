@@ -46,6 +46,7 @@ class MapCanvasView @JvmOverloads constructor(
     private var coastline: List<CoastlinePolygon>? = null
     private var tiles: List<WxlFile> = emptyList()
     private var storms: List<Storm> = emptyList()
+    private var markerLatLon: Pair<Double, Double>? = null
 
     private val backgroundPaint = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
     private val coastlinePaint = Paint().apply {
@@ -55,7 +56,7 @@ class MapCanvasView @JvmOverloads constructor(
         color = Color.BLACK; strokeWidth = 3f; style = Paint.Style.STROKE; isAntiAlias = true
     }
     private val beaufortPaint = Paint().apply {
-        color = Color.BLACK; textSize = 22f; isAntiAlias = true; textAlign = Paint.Align.CENTER
+        color = Color.BLACK; textSize = 32f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
     private val isobarPaint = Paint().apply {
         color = Color.BLACK; strokeWidth = 2f; style = Paint.Style.STROKE; isAntiAlias = true
@@ -64,10 +65,10 @@ class MapCanvasView @JvmOverloads constructor(
         color = Color.BLACK; textSize = 20f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
     private val centerLabelPaint = Paint().apply {
-        color = Color.BLACK; textSize = 38f; isAntiAlias = true; textAlign = Paint.Align.CENTER
+        color = Color.BLACK; textSize = 50f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
     private val centerValuePaint = Paint().apply {
-        color = Color.BLACK; textSize = 24f; isAntiAlias = true; textAlign = Paint.Align.CENTER
+        color = Color.BLACK; textSize = 28f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
     private val stormPaint = Paint().apply {
         color = Color.BLACK; strokeWidth = 4f; style = Paint.Style.STROKE; isAntiAlias = true
@@ -75,20 +76,23 @@ class MapCanvasView @JvmOverloads constructor(
     private val stormLabelPaint = Paint().apply {
         color = Color.BLACK; textSize = 30f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
+    private val markerPaint = Paint().apply {
+        color = Color.BLACK; strokeWidth = 5f; style = Paint.Style.STROKE; isAntiAlias = true
+    }
 
     // Barbs were reported as "almost invisible" on a real device -- ~65%
     // longer than the original 36px, and the Beaufort label is now placed
     // beside the shaft (perpendicular offset) instead of directly below
     // it, so the two no longer visually merge into e.g. "F4/".
     private val windBarbLengthPx = 60f
-    private val beaufortLabelOffsetPx = 26f
+    private val beaufortLabelOffsetPx = 40f
 
     // Minimum on-screen spacing between wind barbs/Beaufort labels, in
     // pixels -- the stride actually used is derived from this and the
     // current zoom (see strideFor), so labels stay readable instead of
     // piling up at low zoom or wastefully sparse at high zoom. Widened
-    // to match the longer barbs above.
-    private val minLabelSpacingPx = 90.0
+    // further per feedback that the chart still felt cluttered.
+    private val minLabelSpacingPx = 130.0
 
     private val scaleDetector = ScaleGestureDetector(context, ScaleListener())
     private val panDetector = GestureDetector(context, PanListener())
@@ -108,6 +112,15 @@ class MapCanvasView @JvmOverloads constructor(
         invalidate()
     }
 
+    /** Marks a specific lat/lon with a fixed crosshair, independent of
+     * where the camera is currently centered -- entering coordinates is
+     * just a "guide" to a location; the pin needs to stay put and stay
+     * visible even after the user pans elsewhere. Pass null to clear it. */
+    fun setMarker(latDeg: Double?, lonDeg: Double?) {
+        markerLatLon = if (latDeg != null && lonDeg != null) Pair(latDeg, lonDeg) else null
+        invalidate()
+    }
+
     /** Recenters the map on (lat, lon) without changing the current zoom level. */
     fun centerOn(latDeg: Double, lonDeg: Double) {
         if (width == 0 || height == 0) {
@@ -115,14 +128,6 @@ class MapCanvasView @JvmOverloads constructor(
             return
         }
         applyCenter(latDeg, lonDeg)
-    }
-
-    /** The lat/lon currently at the center of the screen -- used by "Sync
-     * this area" to know which tile to fetch, since the viewport can be
-     * panned away from the saved ship location. */
-    fun currentCenterLatLon(): Pair<Double, Double> {
-        val (worldX, worldY) = transform.screenToWorld(width / 2.0, height / 2.0)
-        return Pair(-worldY, worldX) // inverse of worldOf: lat = -worldY, lon = worldX
     }
 
     private fun applyCenter(latDeg: Double, lonDeg: Double) {
@@ -165,6 +170,19 @@ class MapCanvasView @JvmOverloads constructor(
         drawPressure(canvas)
         drawWind(canvas)
         drawStorms(canvas)
+        drawMarker(canvas)
+    }
+
+    private fun drawMarker(canvas: Canvas) {
+        val (lat, lon) = markerLatLon ?: return
+        val (worldX, worldY) = worldOf(lat, lon)
+        val (sx, sy) = transform.worldToScreen(worldX, worldY)
+        val x = sx.toFloat()
+        val y = sy.toFloat()
+        val r = 16f
+        canvas.drawCircle(x, y, r, markerPaint)
+        canvas.drawLine(x, y - r * 2.2f, x, y + r * 2.2f, markerPaint)
+        canvas.drawLine(x - r * 2.2f, y, x + r * 2.2f, y, markerPaint)
     }
 
     /** Converts a tile-local grid position (row/col, fractional) to a
