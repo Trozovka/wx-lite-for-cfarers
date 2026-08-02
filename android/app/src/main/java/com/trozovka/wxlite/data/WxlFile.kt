@@ -41,6 +41,10 @@ data class WxlFile(
 ) {
     fun pointAt(row: Int, col: Int): GridPoint = points[row * nLon + col]
 
+    /** 2D pressure grid, row-major — the shape Isobars/PressureCenters expect. */
+    fun pressureGrid(): Array<DoubleArray> =
+        Array(nLat) { row -> DoubleArray(nLon) { col -> pointAt(row, col).pressureHpa.toDouble() } }
+
     companion object {
         private val MAGIC = byteArrayOf('W'.code.toByte(), 'X'.code.toByte(), 'L'.code.toByte(), '1'.code.toByte())
 

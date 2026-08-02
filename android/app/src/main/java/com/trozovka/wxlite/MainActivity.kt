@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.trozovka.wxlite.chart.ChartCanvasView
 import com.trozovka.wxlite.data.ForecastRepository
 import com.trozovka.wxlite.data.LocationStore
 import com.trozovka.wxlite.data.Tiles
@@ -15,13 +16,14 @@ import java.util.Locale
 /**
  * Skeleton screen exercising the real offline-first flow: saved location
  * -> tile lookup -> read from local cache -> explicit sync updates the
- * cache. Everything shown here works with zero connectivity except the
- * Sync button itself, per spec.
+ * cache -> render. Everything shown here works with zero connectivity
+ * except the Sync button itself, per spec.
  */
 class MainActivity : Activity() {
     private lateinit var locationStore: LocationStore
     private lateinit var repository: ForecastRepository
     private lateinit var statusView: TextView
+    private lateinit var chartView: ChartCanvasView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,6 +72,12 @@ class MainActivity : Activity() {
         }
         root.addView(syncBtn)
 
+        chartView = ChartCanvasView(this)
+        root.addView(
+            chartView,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 800),
+        )
+
         setContentView(root)
         refreshStatus()
     }
@@ -81,25 +89,36 @@ class MainActivity : Activity() {
 
         if (position == null) {
             sb.append("No ship location saved yet.\n")
-        } else {
-            val tileId = Tiles.tileForPosition(position.lat, position.lon)
-            sb.append("Ship position: ${position.lat}, ${position.lon}\n")
-            sb.append("Tile: ${tileId ?: "out of covered range"}\n\n")
-
-            if (tileId != null) {
-                val hours = repository.availableHours(tileId)
-                val lastSync = repository.lastSyncedAtMillis()
-                sb.append("Cached forecast hours: ${hours.size} (${hours.take(5)}${if (hours.size > 5) "..." else ""})\n")
-                sb.append(
-                    if (lastSync > 0) {
-                        "Last synced: ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(lastSync))}\n"
-                    } else {
-                        "Never synced — no offline data yet.\n"
-                    },
-                )
-            }
+            statusView.text = sb.toString()
+            return
         }
 
+        val tileId = Tiles.tileForPosition(position.lat, position.lon)
+        sb.append("Ship position: ${position.lat}, ${position.lon}\n")
+        sb.append("Tile: ${tileId ?: "out of covered range"}\n\n")
+
+        if (tileId == null) {
+            statusView.text = sb.toString()
+            return
+        }
+
+        val hours = repository.availableHours(tileId)
+        val lastSync = repository.lastSyncedAtMillis()
+        sb.append("Cached forecast hours: ${hours.size} (${hours.take(5)}${if (hours.size > 5) "..." else ""})\n")
+        sb.append(
+            if (lastSync > 0) {
+                "Last synced: ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(lastSync))}\n"
+            } else {
+                "Never synced — no offline data yet.\n"
+            },
+        )
         statusView.text = sb.toString()
+
+        // Render whatever's earliest in the cache — this is where the
+        // date/time picker described in the spec will eventually plug in.
+        val firstHour = hours.firstOrNull()
+        if (firstHour != null) {
+            repository.cachedFile(tileId, firstHour)?.let { chartView.setData(it) }
+        }
     }
 }
