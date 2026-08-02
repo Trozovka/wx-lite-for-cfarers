@@ -79,6 +79,22 @@ class ForecastRepository(
         return if (file.exists()) file.lastModified() else 0L
     }
 
+    /** Every tile directory currently on disk (i.e. synced at least once). */
+    fun cachedTileIds(): List<String> =
+        baseDir.listFiles { file -> file.isDirectory }?.map { it.name }?.sorted() ?: emptyList()
+
+    /** All cached tiles that have data for [hour], keyed by tile ID. Lets
+     * the map stitch together every tile that's actually been synced,
+     * instead of only ever showing the single tile tied to whatever
+     * lat/lon is currently entered. */
+    fun cachedFilesForHour(hour: Int): Map<String, WxlFile> {
+        val result = LinkedHashMap<String, WxlFile>()
+        for (tileId in cachedTileIds()) {
+            cachedFile(tileId, hour)?.let { result[tileId] = it }
+        }
+        return result
+    }
+
     /** Which forecast hours are actually on disk for this tile right now. */
     fun availableHours(tileId: String): List<Int> {
         val manifest = cachedManifest() ?: return emptyList()

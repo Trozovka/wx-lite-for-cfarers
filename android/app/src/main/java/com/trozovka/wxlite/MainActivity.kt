@@ -120,6 +120,34 @@ class MainActivity : Activity() {
         }
         topPanel.addView(syncBtn)
 
+        // Syncs whichever tile the map is currently centered on, which can
+        // be far from the saved ship location after panning -- lets
+        // coverage be built up by panning + tapping instead of typing
+        // coordinates for every region of interest.
+        val syncAreaBtn = Button(this).apply {
+            text = "Sync this area"
+            setOnClickListener {
+                text = "Syncing area..."
+                isEnabled = false
+                val (lat, lon) = mapView.currentCenterLatLon()
+                val tileId = Tiles.tileForPosition(lat, lon)
+                if (tileId == null) {
+                    Toast.makeText(this@MainActivity, "Current map view is outside covered range (60°S-60°N).", Toast.LENGTH_SHORT).show()
+                    text = "Sync this area"
+                    isEnabled = true
+                } else {
+                    repository.sync(tileId) {
+                        runOnUiThread {
+                            text = "Sync this area"
+                            isEnabled = true
+                            renderCurrentHour()
+                        }
+                    }
+                }
+            }
+        }
+        topPanel.addView(syncAreaBtn)
+
         statusView = TextView(this).apply { textSize = 12f }
         topPanel.addView(statusView)
 
@@ -223,21 +251,26 @@ class MainActivity : Activity() {
         val tileId = currentTileId()
         if (tileId == null || availableHours.isEmpty()) {
             hourLabel.text = "No data"
-            mapView.setWindData(null)
+            mapView.setWindTiles(emptyList())
             updateHourControlsEnabled()
             return
         }
 
         val hour = availableHours[currentHourIndex]
-        val file = repository.cachedFile(tileId, hour)
+        // Render every tile that's been synced for this hour, not just the
+        // one containing the current lat/lon -- otherwise wind only ever
+        // appears in a single tile-sized rectangle no matter how far the
+        // map is panned.
+        val tilesForHour = repository.cachedFilesForHour(hour)
+        mapView.setWindTiles(tilesForHour.values.toList())
+
+        val file = tilesForHour[tileId]
         if (file != null) {
-            mapView.setWindData(file)
             val validDate = SimpleDateFormat("MMM d, HH:mm 'UTC'", Locale.US).apply {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date(file.validTimeSeconds * 1000))
             hourLabel.text = "+${hour}h — $validDate"
         } else {
-            mapView.setWindData(null)
             hourLabel.text = "+${hour}h (file missing)"
         }
         updateHourControlsEnabled()

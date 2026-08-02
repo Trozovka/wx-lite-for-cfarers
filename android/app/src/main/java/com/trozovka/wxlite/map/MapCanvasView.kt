@@ -41,7 +41,7 @@ class MapCanvasView @JvmOverloads constructor(
     private var pendingCenter: Pair<Double, Double>? = null
 
     private var coastline: List<CoastlinePolygon>? = null
-    private var windData: WxlFile? = null
+    private var windTiles: List<WxlFile> = emptyList()
     private var storms: List<Storm> = emptyList()
 
     private val backgroundPaint = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
@@ -61,14 +61,24 @@ class MapCanvasView @JvmOverloads constructor(
         color = Color.BLACK; textSize = 30f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
 
-    private val windStride = 3
     private val windBarbLengthPx = 36f
+
+    // Minimum on-screen spacing between wind barbs/Beaufort labels, in
+    // pixels -- the stride actually used is derived from this and the
+    // current zoom (see strideFor), so labels stay readable instead of
+    // piling up at low zoom or wastefully sparse at high zoom.
+    private val minLabelSpacingPx = 70.0
 
     private val scaleDetector = ScaleGestureDetector(context, ScaleListener())
     private val panDetector = GestureDetector(context, PanListener())
 
-    fun setWindData(file: WxlFile?) {
-        windData = file
+    /** Renders wind for every tile passed in -- callers should pass every
+     * cached tile for the selected hour, not just the tile nearest the
+     * ship, so panning shows wind data anywhere that's actually been
+     * synced (the "camera" here only decides what's visible, per the
+     * world/viewport distinction; it doesn't limit what data exists). */
+    fun setWindTiles(tiles: List<WxlFile>) {
+        windTiles = tiles
         invalidate()
     }
 
@@ -84,6 +94,14 @@ class MapCanvasView @JvmOverloads constructor(
             return
         }
         applyCenter(latDeg, lonDeg)
+    }
+
+    /** The lat/lon currently at the center of the screen -- used by "Sync
+     * this area" to know which tile to fetch, since the viewport can be
+     * panned away from the saved ship location. */
+    fun currentCenterLatLon(): Pair<Double, Double> {
+        val (worldX, worldY) = transform.screenToWorld(width / 2.0, height / 2.0)
+        return Pair(-worldY, worldX) // inverse of worldOf: lat = -worldY, lon = worldX
     }
 
     private fun applyCenter(latDeg: Double, lonDeg: Double) {
@@ -142,10 +160,16 @@ class MapCanvasView @JvmOverloads constructor(
     }
 
     private fun drawWind(canvas: Canvas) {
-        val file = windData ?: return
+        for (file in windTiles) {
+            drawWindTile(canvas, file)
+        }
+    }
+
+    private fun drawWindTile(canvas: Canvas, file: WxlFile) {
+        if (file.nLat < 2 || file.nLon < 2) return
         val latSpan = file.latMax - file.latMin
         val lonSpan = file.lonMax - file.lonMin
-        if (file.nLat < 2 || file.nLon < 2) return
+        val stride = strideFor(file)
 
         var row = 0
         while (row < file.nLat) {
@@ -163,10 +187,21 @@ class MapCanvasView @JvmOverloads constructor(
                 val force = Beaufort.forceForKnots(barb.speedKnots.toDouble())
                 canvas.drawText("F$force", sx.toFloat(), sy.toFloat() + beaufortPaint.textSize + 12f, beaufortPaint)
 
-                col += windStride
+                col += stride
             }
-            row += windStride
+            row += stride
         }
+    }
+
+    /** How many grid points to skip between drawn barbs, derived from the
+     * grid's actual degree spacing and the current zoom, so barbs stay
+     * roughly [minLabelSpacingPx] apart on screen instead of overlapping
+     * at low zoom (previously a fixed stride regardless of zoom level). */
+    private fun strideFor(file: WxlFile): Int {
+        val gridSpacingDeg = (file.latMax - file.latMin) / (file.nLat - 1)
+        if (gridSpacingDeg <= 0f || transform.scale <= 0.0) return 1
+        val rawStride = minLabelSpacingPx / (transform.scale * gridSpacingDeg)
+        return rawStride.toInt().coerceAtLeast(1)
     }
 
     private fun drawSingleBarb(canvas: Canvas, cx: Float, cy: Float, barb: WindBarbSymbol) {
