@@ -1,39 +1,44 @@
 package com.trozovka.wxlite
 
 import android.app.Activity
+import android.graphics.Color
 import android.os.Bundle
 import android.text.InputType
+import android.view.Gravity
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import com.trozovka.wxlite.chart.ChartCanvasView
 import com.trozovka.wxlite.data.ForecastRepository
 import com.trozovka.wxlite.data.LocationStore
 import com.trozovka.wxlite.data.Tiles
-import com.trozovka.wxlite.map.GlobeView
+import com.trozovka.wxlite.map.MapCanvasView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * Skeleton screen exercising the real offline-first flow: saved location
- * -> tile lookup -> read from local cache -> explicit sync updates the
- * cache -> render, with a forecast-hour picker per spec's "bottom of the
- * screen must have simple controls allowing selection of forecast
- * date/time". Everything shown here works with zero connectivity except
- * the Sync button itself.
+ * Full-screen pan/zoom map (MapCanvasView) with two thin overlay panels:
+ * lat/lon entry top-left, forecast date/time (Earlier/Later) at the
+ * bottom. Offline-first flow unchanged underneath: saved location -> tile
+ * lookup -> read from local cache -> explicit sync updates the cache ->
+ * render. Everything shown here works with zero connectivity except the
+ * Sync button itself.
+ *
+ * Replaces the previous scrolling-column layout (fixed-size chart panel +
+ * small globe), which real device testing showed broke in landscape and
+ * had no zoom/pan anywhere.
  */
 class MainActivity : Activity() {
     private lateinit var locationStore: LocationStore
     private lateinit var repository: ForecastRepository
     private lateinit var statusView: TextView
-    private lateinit var chartView: ChartCanvasView
+    private lateinit var mapView: MapCanvasView
     private lateinit var hourLabel: TextView
     private lateinit var prevHourBtn: Button
     private lateinit var nextHourBtn: Button
-    private lateinit var globeView: GlobeView
     private lateinit var latInput: EditText
     private lateinit var lonInput: EditText
 
@@ -46,44 +51,35 @@ class MainActivity : Activity() {
         locationStore = LocationStore(this)
         repository = ForecastRepository(this)
 
-        val root = LinearLayout(this).apply {
+        val root = FrameLayout(this)
+
+        mapView = MapCanvasView(this)
+        root.addView(mapView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+
+        // Top-left: lat/lon entry, defaulted to the same Manila coordinates
+        // as before, so the fields double as a worked example of correct
+        // input format. Overlaid on the map, not a layout row competing
+        // with it for vertical space (that's what broke in landscape).
+        val topPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(32, 64, 32, 32)
+            setPadding(24, 64, 24, 16)
+            setBackgroundColor(Color.argb(200, 255, 255, 255))
         }
 
-        statusView = TextView(this).apply { textSize = 14f }
-        root.addView(statusView)
-
-        val setTestLocationBtn = Button(this).apply {
-            text = "Use test location (Manila)"
-            setOnClickListener { setLocation(14.6, 121.0) }
-        }
-        root.addView(setTestLocationBtn)
-
-        // World-overview globe, per spec's map-view requirement — tapping
-        // it sets the ship's saved location directly, no separate mode.
-        globeView = GlobeView(this).apply {
-            onLocationTapped = { lat, lon -> setLocation(lat, lon) }
-        }
-        root.addView(
-            globeView,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 600),
-        )
-
-        // Manual lat/lon entry, per spec — bridge crew may know their exact
-        // position and shouldn't be forced to tap a small globe for it.
-        val manualEntryRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val latLonRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         latInput = EditText(this).apply {
             hint = "Lat"
+            setText(MANILA_LAT.toString())
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or
                 InputType.TYPE_NUMBER_FLAG_SIGNED
         }
         lonInput = EditText(this).apply {
             hint = "Lon"
+            setText(MANILA_LON.toString())
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or
                 InputType.TYPE_NUMBER_FLAG_SIGNED
         }
-        val setManualLocationBtn = Button(this).apply {
+        val setLocationBtn = Button(this).apply {
             text = "Set"
             setOnClickListener {
                 val lat = latInput.text.toString().toDoubleOrNull()
@@ -95,10 +91,10 @@ class MainActivity : Activity() {
                 }
             }
         }
-        manualEntryRow.addView(latInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        manualEntryRow.addView(lonInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        manualEntryRow.addView(setManualLocationBtn)
-        root.addView(manualEntryRow)
+        latLonRow.addView(latInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        latLonRow.addView(lonInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        latLonRow.addView(setLocationBtn)
+        topPanel.addView(latLonRow)
 
         val syncBtn = Button(this).apply {
             text = "Sync now"
@@ -122,37 +118,47 @@ class MainActivity : Activity() {
                 }
             }
         }
-        root.addView(syncBtn)
+        topPanel.addView(syncBtn)
 
-        chartView = ChartCanvasView(this)
+        statusView = TextView(this).apply { textSize = 12f }
+        topPanel.addView(statusView)
+
         root.addView(
-            chartView,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 800),
+            topPanel,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.TOP or Gravity.START
+            },
         )
 
-        // Forecast date/time control, per spec — deliberately just two
-        // buttons and a label: "minimal buttons", bridge-use simplicity,
-        // not a calendar widget.
-        val hourControls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        // Bottom: forecast date/time, the sole bottom control per spec —
+        // lat/lon now lives in topPanel instead of a four-field bottom row.
+        val bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(16, 16, 16, 32)
+            setBackgroundColor(Color.argb(200, 255, 255, 255))
+        }
         prevHourBtn = Button(this).apply {
             text = "< Earlier"
             setOnClickListener { stepHour(-1) }
         }
         hourLabel = TextView(this).apply {
             textSize = 14f
-            gravity = android.view.Gravity.CENTER
+            gravity = Gravity.CENTER
         }
         nextHourBtn = Button(this).apply {
             text = "Later >"
             setOnClickListener { stepHour(1) }
         }
-        hourControls.addView(prevHourBtn)
-        hourControls.addView(
-            hourLabel,
-            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
+        bottomBar.addView(prevHourBtn)
+        bottomBar.addView(hourLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        bottomBar.addView(nextHourBtn)
+
+        root.addView(
+            bottomBar,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.BOTTOM
+            },
         )
-        hourControls.addView(nextHourBtn)
-        root.addView(hourControls)
 
         setContentView(root)
         refreshStatus()
@@ -173,27 +179,19 @@ class MainActivity : Activity() {
 
     private fun refreshStatus() {
         val position = locationStore.get()
-        val sb = StringBuilder()
-        sb.append("Trozovka WX Lite\n\n")
 
         if (position == null) {
-            sb.append("No ship location saved yet.\n")
-            statusView.text = sb.toString()
+            statusView.text = "No ship location saved yet."
             availableHours = emptyList()
-            globeView.setShipPosition(null, null)
             updateHourControlsEnabled()
             return
         }
 
-        globeView.setShipPosition(position.lat, position.lon)
-        globeView.centerLonDeg = position.lon
+        mapView.centerOn(position.lat, position.lon)
 
         val tileId = Tiles.tileForPosition(position.lat, position.lon)
-        sb.append("Ship position: ${position.lat}, ${position.lon}\n")
-        sb.append("Tile: ${tileId ?: "out of covered range"}\n\n")
-
         if (tileId == null) {
-            statusView.text = sb.toString()
+            statusView.text = "Position ${position.lat}, ${position.lon} — out of covered range."
             availableHours = emptyList()
             updateHourControlsEnabled()
             return
@@ -203,15 +201,14 @@ class MainActivity : Activity() {
         currentHourIndex = currentHourIndex.coerceIn(0, (availableHours.size - 1).coerceAtLeast(0))
 
         val lastSync = repository.lastSyncedAtMillis()
-        sb.append("Cached forecast hours: ${availableHours.size}\n")
-        sb.append(
-            if (lastSync > 0) {
-                "Last synced: ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(lastSync))}\n"
-            } else {
-                "Never synced — no offline data yet.\n"
-            },
-        )
-        statusView.text = sb.toString()
+        val syncText = if (lastSync > 0) {
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(lastSync))
+        } else {
+            "never"
+        }
+        statusView.text = "Tile: $tileId | Cached: ${availableHours.size}h | Synced: $syncText"
+
+        mapView.setStorms(repository.cachedStormsList())
 
         updateHourControlsEnabled()
         renderCurrentHour()
@@ -226,6 +223,7 @@ class MainActivity : Activity() {
         val tileId = currentTileId()
         if (tileId == null || availableHours.isEmpty()) {
             hourLabel.text = "No data"
+            mapView.setWindData(null)
             updateHourControlsEnabled()
             return
         }
@@ -233,15 +231,22 @@ class MainActivity : Activity() {
         val hour = availableHours[currentHourIndex]
         val file = repository.cachedFile(tileId, hour)
         if (file != null) {
-            chartView.setData(file)
-            chartView.setStorms(repository.cachedStormsList())
+            mapView.setWindData(file)
             val validDate = SimpleDateFormat("MMM d, HH:mm 'UTC'", Locale.US).apply {
                 timeZone = java.util.TimeZone.getTimeZone("UTC")
             }.format(Date(file.validTimeSeconds * 1000))
             hourLabel.text = "+${hour}h — $validDate"
         } else {
+            mapView.setWindData(null)
             hourLabel.text = "+${hour}h (file missing)"
         }
         updateHourControlsEnabled()
+    }
+
+    companion object {
+        // Same worked-example position used as the default lat/lon input
+        // values — kept as one named constant so the two can't drift.
+        private const val MANILA_LAT = 14.6
+        private const val MANILA_LON = 121.0
     }
 }
