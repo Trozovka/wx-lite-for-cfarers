@@ -1,0 +1,8 @@
+<resources>
+    <!-- Deliberately plain: android:Theme.Material.Light.NoActionBar, not an
+         AppCompat/Material Components theme — one less library dependency
+         for a low-detail, monochrome weatherfax-style UI. -->
+    <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+</resources>
