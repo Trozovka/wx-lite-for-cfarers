@@ -5,8 +5,11 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.util.AttributeSet
+import android.util.Log
 import android.view.View
 import com.trozovka.wxlite.data.WxlFile
+import com.trozovka.wxlite.map.CoastlineData
+import com.trozovka.wxlite.map.CoastlinePolygon
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -43,11 +46,28 @@ class ChartCanvasView @JvmOverloads constructor(
     private val stormLabelPaint = Paint().apply {
         color = Color.BLACK; textSize = 32f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
+    private val coastlinePaint = Paint().apply {
+        color = Color.rgb(120, 120, 120); strokeWidth = 2f; style = Paint.Style.STROKE; isAntiAlias = true
+    }
 
     // Every Nth grid point gets a wind barb — one per isobar grid cell would
     // be far too dense to read.
     private val windBarbStride = 3
     private val windBarbLengthPx = 40f
+
+    // Loaded lazily from assets on first draw — static data, read once,
+    // not on every frame.
+    private var coastline: List<CoastlinePolygon>? = null
+
+    private fun ensureCoastlineLoaded() {
+        if (coastline != null) return
+        coastline = try {
+            context.assets.open("coastline.bin").use { CoastlineData.parse(it.readBytes()) }
+        } catch (e: Exception) {
+            Log.w("ChartCanvasView", "Failed to load coastline asset", e)
+            emptyList()
+        }
+    }
 
     fun setData(file: WxlFile) {
         wxlFile = file
@@ -73,10 +93,49 @@ class ChartCanvasView @JvmOverloads constructor(
         fun screenX(col: Double) = (col * cellW).toFloat()
         fun screenY(row: Double) = (height - row * cellH).toFloat()
 
+        ensureCoastlineLoaded()
+        drawCoastline(canvas, file, ::screenX, ::screenY)
         drawIsobars(canvas, file, ::screenX, ::screenY)
         drawPressureCenters(canvas, file, ::screenX, ::screenY)
         drawWindBarbs(canvas, file, ::screenX, ::screenY)
         drawStorms(canvas, file, ::screenX, ::screenY)
+    }
+
+    private fun drawCoastline(
+        canvas: Canvas,
+        file: WxlFile,
+        screenX: (Double) -> Float,
+        screenY: (Double) -> Float,
+    ) {
+        val polygons = coastline ?: return
+        val latSpan = file.latMax - file.latMin
+        val lonSpan = file.lonMax - file.lonMin
+        if (latSpan == 0f || lonSpan == 0f) return
+
+        fun toCol(lon: Double) = (lon - file.lonMin) / lonSpan * (file.nLon - 1)
+        fun toRow(lat: Double) = (lat - file.latMin) / latSpan * (file.nLat - 1)
+
+        for (polygon in polygons) {
+            val points = polygon.points
+            if (points.size < 2) continue
+            // Skip polygons with no point anywhere near this tile — cheap
+            // bounding check before drawing every segment.
+            val anyNearby = points.any {
+                it.lat >= file.latMin - 5 && it.lat <= file.latMax + 5 &&
+                    it.lon >= file.lonMin - 5 && it.lon <= file.lonMax + 5
+            }
+            if (!anyNearby) continue
+
+            for (i in 0 until points.size - 1) {
+                val a = points[i]
+                val b = points[i + 1]
+                canvas.drawLine(
+                    screenX(toCol(a.lon)), screenY(toRow(a.lat)),
+                    screenX(toCol(b.lon)), screenY(toRow(b.lat)),
+                    coastlinePaint,
+                )
+            }
+        }
     }
 
     private fun drawStorms(
