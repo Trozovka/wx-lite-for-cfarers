@@ -42,4 +42,38 @@ class TilesTest {
         assertEquals("lat0_lon-180", Tiles.tileForPosition(10.0, 180.0))
         assertEquals("lat-60_lon-180", Tiles.tileForPosition(-45.0, -179.5))
     }
+
+    @Test
+    fun `tilesFor a compact area returns just the one tile it's actually in`() {
+        val points = listOf(Pair(14.6, 121.0), Pair(15.0, 121.5), Pair(14.0, 120.5)) // all near Manila
+        assertEquals(listOf("lat0_lon120"), Tiles.tilesFor(points))
+    }
+
+    @Test
+    fun `tilesFor nearby points collapses onto the same tile via distinct`() {
+        // The two European points from the real bug report -- Irish Sea and
+        // Brittany -- both fall in the same tile.
+        val irishSea = Pair(53.5, -5.3167)
+        val brittany = 48.0 + 25.0 / 60.0 to -(5.0 + 19.0 / 60.0)
+        assertEquals(listOf("lat30_lon-60"), Tiles.tilesFor(listOf(irishSea, brittany)))
+    }
+
+    @Test
+    fun `tilesFor a genuinely spread-out area returns exactly the tiles it spans, not a centroid`() {
+        // Real bug report: Tampa, the Irish Sea, Brittany, and Cuba.
+        // Averaging these four lat/lons lands mid-Atlantic, in open ocean,
+        // nowhere near any of the actual points -- tilesFor must not do
+        // that; it must return the real tiles the points fall in.
+        val tampa = 27.0 + 42.0 / 60.0 to -(82.0 + 24.0 / 60.0)
+        val irishSea = 53.0 + 30.0 / 60.0 to -(5.0 + 19.0 / 60.0)
+        val brittany = 48.0 + 25.0 / 60.0 to -(5.0 + 19.0 / 60.0)
+        val cuba = 21.0 + 23.0 / 60.0 to -(77.0 + 5.0 / 60.0)
+
+        val tiles = Tiles.tilesFor(listOf(tampa, irishSea, brittany, cuba))
+
+        // Tampa and Cuba share a tile; Irish Sea and Brittany share a
+        // different tile -- exactly two distinct tiles, both real,
+        // neither of them a mid-ocean average.
+        assertEquals(listOf("lat0_lon-120", "lat30_lon-60"), tiles)
+    }
 }

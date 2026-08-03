@@ -36,4 +36,13 @@ object Tiles {
 
         return "lat${tileLat}_lon${tileLon}"
     }
+
+    /** Distinct tiles actually containing each of the given lat/lon
+     * points, in order of first occurrence -- deliberately NOT the
+     * centroid (the average of a spread-out set of points can land
+     * nowhere near any of them, in open ocean) and NOT every tile a
+     * bounding box touches (pulls in tiles the area barely grazes).
+     * Nearby points naturally collapse onto the same tile via distinct(). */
+    fun tilesFor(points: List<Pair<Double, Double>>): List<String> =
+        points.mapNotNull { (lat, lon) -> tileForPosition(lat, lon) }.distinct()
 }

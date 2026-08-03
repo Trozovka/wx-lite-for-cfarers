@@ -237,6 +237,15 @@ class MapCanvasView @JvmOverloads constructor(
      * -- found by inverse-projecting the four screen corners, not by
      * iterating the whole world, so it stays cheap regardless of zoom. */
     private fun drawGrid(canvas: Canvas) {
+        // Grid lines spread apart on screen as you zoom in (they're drawn
+        // in world space, everything else scales with them) -- a fixed
+        // label size was reported as unreadable at high zoom, since it
+        // stayed tiny while the available space around it grew. Scaled to
+        // roughly match the old fixed 18px default at the initial zoom
+        // level, clamped so it neither vanishes when zoomed out nor
+        // becomes absurdly large at extreme zoom-in.
+        gridLabelPaint.textSize = (transform.scale * 2.25).toFloat().coerceIn(14f, 40f)
+
         val corners = listOf(
             transform.screenToWorld(0.0, 0.0),
             transform.screenToWorld(width.toDouble(), 0.0),

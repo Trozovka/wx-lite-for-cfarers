@@ -87,33 +87,26 @@ class MainActivity : Activity() {
         }
         topPanel.addView(setAreaBtn)
 
-        // Syncs the single tile covering the passage-plan area's centroid
-        // (falls back to the tile under the crosshair if no area is set).
-        // Deliberately just one tile, not every tile the area's bounding
-        // box touches: a boundary-straddling area was pulling in 2-4 huge
-        // 30x60-degree tiles at once, most of which was far outside the
-        // actual passage plan and made syncing noticeably slower -- this
-        // is a real limitation of the tile grid's size, not something an
-        // app-side change can fully fix without the backend generating
-        // custom-sized regions per request, which is a bigger change than
-        // this pass. Additional regions can still be added by clearing the
-        // area, panning the crosshair elsewhere, and syncing again.
+        // Syncs the distinct tile(s) that actually CONTAIN each
+        // passage-plan waypoint (falls back to the tile under the
+        // crosshair if no area is set). Deliberately not the centroid
+        // (the arithmetic mean of a spread-out area can land nowhere near
+        // any of the actual points -- e.g. averaging Florida, the Irish
+        // Sea, Brittany, and Cuba lands mid-Atlantic, in open ocean,
+        // confirmed as a real bug this way) and not every tile the area's
+        // bounding box touches (pulls in tiles the area barely grazes).
+        // A tight-fitting single tile only exists for an area that's
+        // genuinely compact; a route that legitimately spans multiple
+        // regions needs multiple tiles synced to show real coverage --
+        // that's an honest reflection of the area defined, not a bug.
         val syncBtn = Button(this).apply {
             text = "Sync now"
             setOnClickListener {
-                val tileId = tileIdToSync()
-                if (tileId == null) {
+                val tileIds = tileIdsToSync()
+                if (tileIds.isEmpty()) {
                     statusView.text = "Crosshair is outside covered range (60°S-60°N)."
                 } else {
-                    text = "Syncing..."
-                    isEnabled = false
-                    repository.sync(tileId) {
-                        runOnUiThread {
-                            text = "Sync now"
-                            isEnabled = true
-                            refreshStatus()
-                        }
-                    }
+                    syncTiles(this, tileIds)
                 }
             }
         }
@@ -202,17 +195,37 @@ class MainActivity : Activity() {
         crosshairLabel.text = "Lat = ${Coordinates.formatLat(lat)}, Lon = ${Coordinates.formatLon(lon)}"
     }
 
-    /** The single tile covering the passage-plan area's centroid, if an
-     * area is set; otherwise the tile under the crosshair. */
-    private fun tileIdToSync(): String? {
+    /** The distinct tile(s) each passage-plan waypoint actually falls in;
+     * falls back to the tile under the crosshair if no area is set. */
+    private fun tileIdsToSync(): List<String> {
         val points = areaStore.get().filterNotNull()
         if (points.isNotEmpty()) {
-            val centroidLat = points.map { it.lat }.average()
-            val centroidLon = points.map { it.lon }.average()
-            Tiles.tileForPosition(centroidLat, centroidLon)?.let { return it }
+            val tileIds = Tiles.tilesFor(points.map { Pair(it.lat, it.lon) })
+            if (tileIds.isNotEmpty()) return tileIds
         }
         val (lat, lon) = mapView.currentCenterLatLon()
-        return Tiles.tileForPosition(lat, lon)
+        return listOfNotNull(Tiles.tileForPosition(lat, lon))
+    }
+
+    private fun syncTiles(button: Button, tileIds: List<String>) {
+        button.isEnabled = false
+        val total = tileIds.size
+        var completed = 0
+        button.text = if (total > 1) "Syncing 0/$total..." else "Syncing..."
+        for (tileId in tileIds) {
+            repository.sync(tileId) {
+                runOnUiThread {
+                    completed++
+                    if (completed < total) {
+                        button.text = "Syncing $completed/$total..."
+                    } else {
+                        button.text = "Sync now"
+                        button.isEnabled = true
+                        refreshStatus()
+                    }
+                }
+            }
+        }
     }
 
     private fun showAboutDialog() {
