@@ -182,10 +182,7 @@ class MapCanvasView @JvmOverloads constructor(
 
     private fun applyCenter(latDeg: Double, lonDeg: Double) {
         val (worldX, worldY) = worldOf(latDeg, lonDeg)
-        transform = transform.copy(
-            translateX = width / 2.0 - worldX * transform.scale,
-            translateY = height / 2.0 - worldY * transform.scale,
-        )
+        transform = transform.centeredOn(worldX, worldY, width.toDouble(), height.toDouble())
         invalidate()
         onViewportChanged?.invoke()
     }

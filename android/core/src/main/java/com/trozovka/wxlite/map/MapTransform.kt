@@ -25,6 +25,18 @@ data class MapTransform(
     /** Shifts the view by ([dx], [dy]) screen pixels — a drag/scroll pan. */
     fun panned(dx: Double, dy: Double): MapTransform = copy(translateX = translateX + dx, translateY = translateY + dy)
 
+    /** Returns a transform (same scale) that puts the given world point
+     * exactly at the center of a [viewWidth] x [viewHeight] screen — the
+     * math behind "recenter the camera on this location." Pulled out of
+     * the (untestable) View layer specifically so this can be locked down
+     * with a real test, independent of whether the caller remembers to
+     * invoke it at the right time. */
+    fun centeredOn(worldX: Double, worldY: Double, viewWidth: Double, viewHeight: Double): MapTransform =
+        copy(
+            translateX = viewWidth / 2.0 - worldX * scale,
+            translateY = viewHeight / 2.0 - worldY * scale,
+        )
+
     /**
      * Scales by [factor] around the screen point ([focusX], [focusY]) —
      * standard pinch-zoom behavior: whatever world point is currently under

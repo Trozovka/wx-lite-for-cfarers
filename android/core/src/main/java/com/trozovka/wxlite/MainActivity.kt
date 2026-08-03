@@ -3,6 +3,7 @@ package com.trozovka.wxlite
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Bundle
 import android.view.Gravity
@@ -65,22 +66,32 @@ class MainActivity : Activity() {
         areaStore = AreaStore(this)
         repository = ForecastRepository(this, tier)
 
+        // Portrait's tall-narrow layout (control panel stacked above the
+        // map) doesn't fit landscape's short-wide aspect ratio -- reported
+        // as the panel eating nearly the whole screen there. The Activity
+        // is recreated fresh on every rotation (no configChanges declared),
+        // so checking orientation once here and branching layout accordingly
+        // is sufficient; no onConfigurationChanged handling needed.
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
         val root = FrameLayout(this)
 
         mapView = MapCanvasView(this)
         root.addView(mapView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         mapView.onViewportChanged = { updateCrosshairLabel() }
 
-        // Top-left: opens the passage-plan area screen (10 waypoints) and
-        // syncs the tile currently under the crosshair.
+        // Top control panel: opens the passage-plan area screen, syncs,
+        // About. Portrait: stacked vertically (was already fine). Landscape:
+        // one compact horizontal row instead, so it stays a thin strip
+        // rather than consuming most of a short screen's height.
         val topPanel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 64, 24, 16)
+            orientation = if (isLandscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+            setPadding(if (isLandscape) 16 else 24, if (isLandscape) 16 else 64, 16, 12)
             setBackgroundColor(Color.argb(200, 255, 255, 255))
         }
 
         val setAreaBtn = Button(this).apply {
-            text = "Set Passage Area (10 pts)"
+            text = if (isLandscape) "Area" else "Set Passage Area (10 pts)"
             setOnClickListener {
                 startActivityForResult(Intent(this@MainActivity, AreaWaypointActivity::class.java), REQUEST_SET_AREA)
             }
@@ -119,35 +130,49 @@ class MainActivity : Activity() {
         topPanel.addView(aboutBtn)
 
         statusView = TextView(this).apply { textSize = 12f }
-        topPanel.addView(statusView)
+        if (isLandscape) {
+            topPanel.addView(
+                statusView,
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { gravity = Gravity.CENTER_VERTICAL },
+            )
+        } else {
+            topPanel.addView(statusView)
+        }
 
         root.addView(
             topPanel,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+            FrameLayout.LayoutParams(
+                if (isLandscape) FrameLayout.LayoutParams.MATCH_PARENT else FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
                 gravity = Gravity.TOP or Gravity.START
             },
         )
 
-        // Bottom: crosshair position, then forecast date/time -- the
-        // crosshair readout sits directly above the date/time row, same
-        // font size, both inside one bottom panel.
+        // Bottom bar: crosshair position, then forecast date/time.
+        // Portrait: two stacked rows (was already fine). Landscape: the
+        // crosshair and hour labels share ONE row instead of stacking, so
+        // this panel doesn't also eat vertical space on a short screen.
         val bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16, 16, 16, 32)
+            setPadding(16, if (isLandscape) 8 else 16, 16, if (isLandscape) 12 else 32)
             setBackgroundColor(Color.argb(200, 255, 255, 255))
         }
 
-        crosshairLabel = TextView(this).apply {
-            textSize = 14f
-            gravity = Gravity.CENTER
-        }
-        bottomBar.addView(crosshairLabel, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        if (isLandscape) {
+            val infoRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            crosshairLabel = TextView(this).apply { textSize = 12f; gravity = Gravity.CENTER }
+            hourLabel = TextView(this).apply { textSize = 12f; gravity = Gravity.CENTER }
+            infoRow.addView(crosshairLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            infoRow.addView(hourLabel, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            bottomBar.addView(infoRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        } else {
+            crosshairLabel = TextView(this).apply { textSize = 14f; gravity = Gravity.CENTER }
+            bottomBar.addView(crosshairLabel, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
-        hourLabel = TextView(this).apply {
-            textSize = 14f
-            gravity = Gravity.CENTER
+            hourLabel = TextView(this).apply { textSize = 14f; gravity = Gravity.CENTER }
+            bottomBar.addView(hourLabel, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         }
-        bottomBar.addView(hourLabel, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         val hourButtonsRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         prevHourBtn = Button(this).apply {
@@ -183,11 +208,17 @@ class MainActivity : Activity() {
     }
 
     private fun loadArea(recenterOnPointOne: Boolean) {
-        val points = areaStore.get()
-        mapView.setArea(points)
+        mapView.setArea(areaStore.get())
         if (recenterOnPointOne) {
-            points.firstOrNull()?.let { mapView.centerOn(it.lat, it.lon) }
+            recenterOnFirstAreaPoint()
         }
+    }
+
+    /** Recenters on the first FILLED waypoint, not literally list index 0
+     * -- if point #1's row was left blank but #2 onward are filled, the
+     * area is still valid and should still recenter, on #2. */
+    private fun recenterOnFirstAreaPoint() {
+        areaStore.get().filterNotNull().firstOrNull()?.let { mapView.centerOn(it.lat, it.lon) }
     }
 
     private fun updateCrosshairLabel() {
@@ -221,6 +252,15 @@ class MainActivity : Activity() {
                     } else {
                         button.text = "Sync now"
                         button.isEnabled = true
+                        // Recenter on the area's first point once sync
+                        // finishes -- previously this only happened when
+                        // the area was first saved, so panning away
+                        // afterward (or a route spanning several tiles at
+                        // once) left the camera showing whatever it
+                        // happened to be showing, unrelated to what was
+                        // just synced. A no-op when no area is set (falls
+                        // back to a no-op empty list).
+                        recenterOnFirstAreaPoint()
                         refreshStatus()
                     }
                 }

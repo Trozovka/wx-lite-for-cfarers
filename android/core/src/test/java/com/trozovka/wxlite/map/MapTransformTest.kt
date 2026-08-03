@@ -68,4 +68,40 @@ class MapTransformTest {
         assertEquals(direct.translateX, stepped.translateX, 0.0001)
         assertEquals(direct.translateY, stepped.translateY, 0.0001)
     }
+
+    @Test
+    fun `centeredOn places the given world point exactly at screen center, regardless of prior pan state`() {
+        val t = MapTransform(scale = 8.0, translateX = 999.0, translateY = -123.0) // arbitrary prior pan
+        val viewWidth = 1080.0
+        val viewHeight = 2000.0
+        val worldX = 45.0
+        val worldY = -20.0
+
+        val centered = t.centeredOn(worldX, worldY, viewWidth, viewHeight)
+        val (screenX, screenY) = centered.worldToScreen(worldX, worldY)
+
+        assertEquals(viewWidth / 2.0, screenX, 0.001)
+        assertEquals(viewHeight / 2.0, screenY, 0.001)
+        assertEquals(t.scale, centered.scale, 0.001) // zoom level preserved, only position changes
+    }
+
+    @Test
+    fun `centeredOn a real waypoint from the bug report lands exactly at screen center`() {
+        // Tampa, one of the four points from the actual device-reported
+        // bug (weather rendered nowhere near the passage-plan area) --
+        // locks down that the centering MATH is correct. Whether
+        // MainActivity actually calls this after Sync is a separate,
+        // device-only concern this test can't cover.
+        val tampaLat = 27.0 + 42.0 / 60.0
+        val tampaLon = -(82.0 + 24.0 / 60.0)
+        val worldX = tampaLon // MapCanvasView.worldOf: x = lon
+        val worldY = -tampaLat // MapCanvasView.worldOf: y = -lat
+
+        val t = MapTransform(scale = 8.0, translateX = 0.0, translateY = 0.0)
+            .centeredOn(worldX, worldY, viewWidth = 1080.0, viewHeight = 2000.0)
+        val (screenX, screenY) = t.worldToScreen(worldX, worldY)
+
+        assertEquals(540.0, screenX, 0.001)
+        assertEquals(1000.0, screenY, 0.001)
+    }
 }
