@@ -2,11 +2,12 @@ package com.trozovka.wxlite.data
 
 /**
  * Per spec Section 1: "Free version (public) is: only 1-day forecast" /
- * "Paid version (private) is: 10-day forecast". This repo (the public
- * core) is hardcoded to FREE — the private paid app depends on this same
- * code but is expected to select PAID once Section 9's exact cross-repo
- * dependency mechanism is decided. Deliberately not building that
- * mechanism yet rather than guessing at it.
+ * "Paid version (private) is: 10-day forecast". MainActivity (also in
+ * this module) selects between the two via an intent extra
+ * (EXTRA_TIER); the free app's manifest launches it with no extras and
+ * gets FREE by default, while wx-pro-for-cfarers's LicenseGateActivity
+ * launches it explicitly with PAID after a successful license check
+ * (or FREE on an invalid/missing license, the freemium fallback).
  */
 enum class ForecastTier(val maxHour: Int) {
     FREE(24),

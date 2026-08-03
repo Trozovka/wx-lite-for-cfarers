@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+A plain VectorDrawable app icon, referenced directly via android:icon.
+Works natively down to API 21, the app's actual minSdk: no legacy PNG
+fallbacks needed, no adaptive-icon layers, no new dependency.
+Monochrome-on-navy, matching the app's own weatherfax aesthetic: a
+compass ring with a wind-barb-style needle.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path android:fillColor="#0B1F3A" android:pathData="M0,0h108v108h0z" />
+
+    <path
+        android:pathData="M54,20 a34,34 0 1,0 0.1,0 z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:fillColor="#00000000" />
+
+    <path
+        android:pathData="M54,24 L54,84"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M54,30 L70,38"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M54,42 L68,49"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:fillColor="#00000000" />
+</vector>
