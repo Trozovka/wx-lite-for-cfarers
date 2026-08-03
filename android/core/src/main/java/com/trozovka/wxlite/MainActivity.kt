@@ -204,6 +204,17 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_SET_AREA) {
             loadArea(recenterOnPointOne = true)
+            // loadArea only updates the area overlay + camera position -- it
+            // never touches mapView's rendered wind/pressure tiles. If the
+            // user cleared the cache on the Area screen, the map would keep
+            // showing whatever WxlFile objects were already loaded into
+            // memory (parsed data, unaffected by deleting the underlying
+            // files) until something explicitly re-reads the cache. That's
+            // exactly the reported bug: cache was genuinely cleared on disk,
+            // the screen just never found out. refreshStatus() re-reads the
+            // cache and calls renderCurrentHour(), which re-sets mapView's
+            // tiles from whatever's actually on disk now.
+            refreshStatus()
         }
     }
 
