@@ -45,6 +45,16 @@ data class WxlFile(
     fun pressureGrid(): Array<DoubleArray> =
         Array(nLat) { row -> DoubleArray(nLon) { col -> pointAt(row, col).pressureHpa.toDouble() } }
 
+    /** Converts a grid row/col to real lat/lon — needed to compare
+     * positions across two different hours' files, whose grids can be at
+     * different resolutions (finer for days 1-3, coarser for days 4-10),
+     * so raw row/col indices from one file are not comparable to another. */
+    fun latLonAt(row: Int, col: Int): Pair<Double, Double> {
+        val lat = latMin + (latMax - latMin) * row / (nLat - 1)
+        val lon = lonMin + (lonMax - lonMin) * col / (nLon - 1)
+        return Pair(lat.toDouble(), lon.toDouble())
+    }
+
     companion object {
         private val MAGIC = byteArrayOf('W'.code.toByte(), 'X'.code.toByte(), 'L'.code.toByte(), '1'.code.toByte())
 

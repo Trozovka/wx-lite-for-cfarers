@@ -63,4 +63,12 @@ class WxlFileTest {
         bad[0] = 'X'.code.toByte()
         WxlFile.parse(bad)
     }
+
+    @Test
+    fun `latLonAt maps grid corners to the file's actual lat-lon bounds`() {
+        val file = WxlFile.parse(hexToBytes(knownGoodHex))
+        assertEquals(Pair(10.0, 120.0), file.latLonAt(0, 0))
+        assertEquals(Pair(11.0, 121.0), file.latLonAt(1, 1))
+        assertEquals(Pair(10.0, 121.0), file.latLonAt(0, 1))
+    }
 }

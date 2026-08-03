@@ -1,7 +1,7 @@
 package com.trozovka.wxlite
 
 import android.app.Activity
-import android.content.Intent
+import android.app.AlertDialog
 import android.graphics.Color
 import android.os.Bundle
 import android.text.Editable
@@ -18,6 +18,7 @@ import android.widget.Toast
 import com.trozovka.wxlite.chart.Coordinates
 import com.trozovka.wxlite.data.AreaPoint
 import com.trozovka.wxlite.data.AreaStore
+import com.trozovka.wxlite.data.ForecastRepository
 
 /**
  * The "second sheet" -- up to 10 waypoints (degrees-minutes, the maritime
@@ -87,6 +88,33 @@ class AreaWaypointActivity : Activity() {
         }
         root.addView(cancelBtn)
 
+        val clearAllBtn = Button(this).apply {
+            text = "Clear all"
+            setOnClickListener { rows.forEach { clearRow(it) } }
+        }
+        root.addView(clearAllBtn)
+
+        // Cache is tier-agnostic file storage (not area-specific), but
+        // placed here per explicit request -- right below "Clear all" --
+        // to free up storage as a related "start fresh" action. Confirms
+        // first since it deletes every synced forecast, not just this
+        // screen's own state.
+        val clearCacheBtn = Button(this).apply {
+            text = "Clear cache"
+            setOnClickListener {
+                AlertDialog.Builder(this@AreaWaypointActivity)
+                    .setTitle("Clear cache")
+                    .setMessage("Delete every synced forecast? You'll need to sync again to see weather data.")
+                    .setPositiveButton("Clear") { _, _ ->
+                        ForecastRepository(this@AreaWaypointActivity).clearCache()
+                        Toast.makeText(this@AreaWaypointActivity, "Cache cleared.", Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+        root.addView(clearCacheBtn)
+
         scroll.addView(root)
         setContentView(scroll)
     }
@@ -97,12 +125,14 @@ class AreaWaypointActivity : Activity() {
             setPadding(0, 16, 0, 16)
         }
 
-        container.addView(
-            TextView(this).apply {
-                text = "#$pointNumber"
-                textSize = 15f
-            },
+        val headerRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        headerRow.addView(
+            TextView(this).apply { text = "#$pointNumber"; textSize = 15f },
+            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f),
         )
+        val clearRowBtn = Button(this).apply { text = "Clear" }
+        headerRow.addView(clearRowBtn)
+        container.addView(headerRow)
 
         val existingLatDm = existing?.let { Coordinates.decimalToDegMin(it.lat) }
         val existingLonDm = existing?.let { Coordinates.decimalToDegMin(it.lon) }
@@ -141,8 +171,19 @@ class AreaWaypointActivity : Activity() {
         lonRow.addView(lonHemi)
         container.addView(lonRow)
 
-        rows.add(WaypointRow(latDeg, latMin, latHemi, lonDeg, lonMin, lonHemi))
+        val waypointRow = WaypointRow(latDeg, latMin, latHemi, lonDeg, lonMin, lonHemi)
+        clearRowBtn.setOnClickListener { clearRow(waypointRow) }
+        rows.add(waypointRow)
         return container
+    }
+
+    private fun clearRow(row: WaypointRow) {
+        row.latDeg.setText("")
+        row.latMin.setText("")
+        row.latHemi.text = "N"
+        row.lonDeg.setText("")
+        row.lonMin.setText("")
+        row.lonHemi.text = "E"
     }
 
     private fun degreesInput(maxLength: Int, hint: String): EditText = EditText(this).apply {

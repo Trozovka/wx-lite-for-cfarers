@@ -10,11 +10,16 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.trozovka.wxlite.chart.CenterType
 import com.trozovka.wxlite.chart.Coordinates
+import com.trozovka.wxlite.chart.LowPressureTracker
+import com.trozovka.wxlite.chart.PressureCenters
+import com.trozovka.wxlite.chart.TrackedLow
 import com.trozovka.wxlite.data.AreaStore
 import com.trozovka.wxlite.data.ForecastRepository
 import com.trozovka.wxlite.data.ForecastTier
 import com.trozovka.wxlite.data.Tiles
+import com.trozovka.wxlite.data.WxlFile
 import com.trozovka.wxlite.map.MapCanvasView
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -82,23 +87,33 @@ class MainActivity : Activity() {
         }
         topPanel.addView(setAreaBtn)
 
-        // Syncs every tile the passage-plan area's bounding box touches
-        // (typically 1-4 tiles for a normal-sized voyage leg), so the
-        // forecast covers as much of the actual area as the region grid
-        // allows -- falls back to just the tile under the crosshair if no
-        // area is set yet. Each tile is ~150KB for a full 10-day forecast
-        // (measured against the real published data); still a single
-        // explicit tap, never automatic, and still bounded (not "sync the
-        // whole 24-tile world," which was tried and reverted earlier for
-        // taking too long/using too much data on a slow link).
+        // Syncs the single tile covering the passage-plan area's centroid
+        // (falls back to the tile under the crosshair if no area is set).
+        // Deliberately just one tile, not every tile the area's bounding
+        // box touches: a boundary-straddling area was pulling in 2-4 huge
+        // 30x60-degree tiles at once, most of which was far outside the
+        // actual passage plan and made syncing noticeably slower -- this
+        // is a real limitation of the tile grid's size, not something an
+        // app-side change can fully fix without the backend generating
+        // custom-sized regions per request, which is a bigger change than
+        // this pass. Additional regions can still be added by clearing the
+        // area, panning the crosshair elsewhere, and syncing again.
         val syncBtn = Button(this).apply {
             text = "Sync now"
             setOnClickListener {
-                val tileIds = tileIdsToSync()
-                if (tileIds.isEmpty()) {
+                val tileId = tileIdToSync()
+                if (tileId == null) {
                     statusView.text = "Crosshair is outside covered range (60°S-60°N)."
                 } else {
-                    syncTiles(this, tileIds)
+                    text = "Syncing..."
+                    isEnabled = false
+                    repository.sync(tileId) {
+                        runOnUiThread {
+                            text = "Sync now"
+                            isEnabled = true
+                            refreshStatus()
+                        }
+                    }
                 }
             }
         }
@@ -187,42 +202,17 @@ class MainActivity : Activity() {
         crosshairLabel.text = "Lat = ${Coordinates.formatLat(lat)}, Lon = ${Coordinates.formatLon(lon)}"
     }
 
-    /** Prefers every tile the passage-plan area's bounding box touches;
-     * falls back to the single tile under the crosshair if no area is
-     * set (or the area's box happens to fall outside the covered range). */
-    private fun tileIdsToSync(): List<String> {
+    /** The single tile covering the passage-plan area's centroid, if an
+     * area is set; otherwise the tile under the crosshair. */
+    private fun tileIdToSync(): String? {
         val points = areaStore.get().filterNotNull()
         if (points.isNotEmpty()) {
-            val latMin = points.minOf { it.lat }
-            val latMax = points.maxOf { it.lat }
-            val lonMin = points.minOf { it.lon }
-            val lonMax = points.maxOf { it.lon }
-            val areaTiles = Tiles.tilesIntersecting(latMin, latMax, lonMin, lonMax)
-            if (areaTiles.isNotEmpty()) return areaTiles
+            val centroidLat = points.map { it.lat }.average()
+            val centroidLon = points.map { it.lon }.average()
+            Tiles.tileForPosition(centroidLat, centroidLon)?.let { return it }
         }
         val (lat, lon) = mapView.currentCenterLatLon()
-        return listOfNotNull(Tiles.tileForPosition(lat, lon))
-    }
-
-    private fun syncTiles(button: Button, tileIds: List<String>) {
-        button.isEnabled = false
-        val total = tileIds.size
-        var completed = 0
-        button.text = if (total > 1) "Syncing 0/$total..." else "Syncing..."
-        for (tileId in tileIds) {
-            repository.sync(tileId) {
-                runOnUiThread {
-                    completed++
-                    if (completed < total) {
-                        button.text = "Syncing $completed/$total..."
-                    } else {
-                        button.text = "Sync now"
-                        button.isEnabled = true
-                        refreshStatus()
-                    }
-                }
-            }
-        }
+        return Tiles.tileForPosition(lat, lon)
     }
 
     private fun showAboutDialog() {
@@ -267,6 +257,31 @@ class MainActivity : Activity() {
         renderCurrentHour()
     }
 
+    /** Matches each low-pressure center at the current hour to its
+     * counterpart at the NEXT cached hour (same tile) to compute a
+     * movement arrow -- this is what actually changes as the user steps
+     * through forecast hours, per the operator's explicit ask, since a
+     * low's direction of travel genuinely shifts hour to hour. Falls back
+     * to no arrows if the next hour isn't cached for a given tile (can't
+     * determine movement from a single snapshot). */
+    private fun computeLowPressureTracks(tilesForHour: Map<String, WxlFile>): List<TrackedLow> {
+        val nextHour = availableHours.getOrNull(currentHourIndex + 1) ?: return emptyList()
+        val tilesForNextHour = repository.cachedFilesForHour(nextHour)
+
+        val tracks = mutableListOf<TrackedLow>()
+        for ((tileId, file) in tilesForHour) {
+            val nextFile = tilesForNextHour[tileId] ?: continue
+            val currentLows = PressureCenters.find(file.pressureGrid())
+                .filter { it.type == CenterType.LOW }
+                .map { file.latLonAt(it.row, it.col) }
+            val nextLows = PressureCenters.find(nextFile.pressureGrid())
+                .filter { it.type == CenterType.LOW }
+                .map { nextFile.latLonAt(it.row, it.col) }
+            tracks.addAll(LowPressureTracker.track(currentLows, nextLows))
+        }
+        return tracks
+    }
+
     private fun updateHourControlsEnabled() {
         prevHourBtn.isEnabled = availableHours.isNotEmpty() && currentHourIndex > 0
         nextHourBtn.isEnabled = availableHours.isNotEmpty() && currentHourIndex < availableHours.size - 1
@@ -276,6 +291,7 @@ class MainActivity : Activity() {
         if (availableHours.isEmpty()) {
             hourLabel.text = "No data — tap Sync now"
             mapView.setTiles(emptyList())
+            mapView.setLowPressureTracks(emptyList())
             updateHourControlsEnabled()
             return
         }
@@ -285,6 +301,7 @@ class MainActivity : Activity() {
         // whole world, not just whichever tile the crosshair is over.
         val tilesForHour = repository.cachedFilesForHour(hour)
         mapView.setTiles(tilesForHour.values.toList())
+        mapView.setLowPressureTracks(computeLowPressureTracks(tilesForHour))
 
         // Every tile for a given hour shares the same forecast valid time
         // (same run), so any one of them gives the right date/time label.

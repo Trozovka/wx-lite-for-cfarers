@@ -18,6 +18,7 @@ import com.trozovka.wxlite.chart.Isobars
 import com.trozovka.wxlite.chart.PressureCenters
 import com.trozovka.wxlite.chart.Storm
 import com.trozovka.wxlite.chart.Storms
+import com.trozovka.wxlite.chart.TrackedLow
 import com.trozovka.wxlite.chart.WindBarb
 import com.trozovka.wxlite.chart.WindBarbSymbol
 import com.trozovka.wxlite.data.AreaPoint
@@ -48,6 +49,7 @@ class MapCanvasView @JvmOverloads constructor(
     private var tiles: List<WxlFile> = emptyList()
     private var storms: List<Storm> = emptyList()
     private var areaPoints: List<AreaPoint?> = emptyList()
+    private var lowPressureTracks: List<TrackedLow> = emptyList()
 
     /** Fires whenever the viewport (pan/zoom/programmatic recenter)
      * changes, i.e. whenever the crosshair's lat/lon reading would be
@@ -101,6 +103,12 @@ class MapCanvasView @JvmOverloads constructor(
     private val crosshairPaint = Paint().apply {
         color = Color.BLACK; strokeWidth = 2f; style = Paint.Style.STROKE; isAntiAlias = true
     }
+    private val lowTrackLinePaint = Paint().apply {
+        color = Color.RED; strokeWidth = 5f; style = Paint.Style.STROKE; isAntiAlias = true
+    }
+    private val lowTrackHeadPaint = Paint().apply {
+        color = Color.RED; style = Paint.Style.FILL; isAntiAlias = true
+    }
 
     // Barbs were reported as "almost invisible" on a real device -- ~65%
     // longer than the original 36px, and the Beaufort label is now placed
@@ -144,6 +152,15 @@ class MapCanvasView @JvmOverloads constructor(
      * passage-plan area, connected in order. */
     fun setArea(points: List<AreaPoint?>) {
         areaPoints = points
+        invalidate()
+    }
+
+    /** Red movement arrows for tracked low-pressure centers -- recomputed
+     * by the caller whenever the selected forecast hour changes, since a
+     * low's direction of movement is only meaningful relative to the next
+     * (or previous) cached hour. */
+    fun setLowPressureTracks(tracks: List<TrackedLow>) {
+        lowPressureTracks = tracks
         invalidate()
     }
 
@@ -210,6 +227,7 @@ class MapCanvasView @JvmOverloads constructor(
         drawCoastline(canvas)
         drawArea(canvas)
         drawPressure(canvas)
+        drawLowPressureTracks(canvas)
         drawWind(canvas)
         drawStorms(canvas)
         drawCrosshair(canvas)
@@ -341,6 +359,38 @@ class MapCanvasView @JvmOverloads constructor(
                 y + centerLabelPaint.textSize * 0.8f,
                 centerValuePaint,
             )
+        }
+    }
+
+    /** Red arrow from each tracked low's current position, pointing toward
+     * where it's headed at the next cached forecast hour -- offset a
+     * little from the low's own position so it doesn't sit on top of the
+     * "L" label, and starting away from center like the wind barbs do. */
+    private fun drawLowPressureTracks(canvas: Canvas) {
+        for (track in lowPressureTracks) {
+            val (cx, cy) = screenOf(track.lat, track.lon)
+            val bearingRad = Math.toRadians(track.bearingDeg)
+            val dx = sin(bearingRad).toFloat()
+            val dy = -cos(bearingRad).toFloat()
+
+            val startOffset = 55f
+            val length = 75f
+            val startX = cx + dx * startOffset
+            val startY = cy + dy * startOffset
+            val tipX = cx + dx * (startOffset + length)
+            val tipY = cy + dy * (startOffset + length)
+            canvas.drawLine(startX, startY, tipX, tipY, lowTrackLinePaint)
+
+            val perpDx = -dy
+            val perpDy = dx
+            val headLen = 18f
+            val headWidth = 11f
+            val path = Path()
+            path.moveTo(tipX, tipY)
+            path.lineTo(tipX - dx * headLen + perpDx * headWidth, tipY - dy * headLen + perpDy * headWidth)
+            path.lineTo(tipX - dx * headLen - perpDx * headWidth, tipY - dy * headLen - perpDy * headWidth)
+            path.close()
+            canvas.drawPath(path, lowTrackHeadPaint)
         }
     }
 

@@ -30,6 +30,14 @@ class ForecastRepository(
 
     private val executor = Executors.newSingleThreadExecutor()
 
+    /** Deletes every cached tile, manifest, and storm file -- frees the
+     * storage back up. Tier-agnostic (deletes everything regardless of
+     * what tier synced it); the user re-syncs whatever they need again
+     * afterward, which is the explicit tradeoff of this action. */
+    fun clearCache() {
+        baseDir.deleteRecursively()
+    }
+
     // ---------- offline reads ----------
 
     fun cachedManifest(): JSONObject? {
