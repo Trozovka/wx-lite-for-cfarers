@@ -42,4 +42,27 @@ class TilesTest {
         assertEquals("lat0_lon-180", Tiles.tileForPosition(10.0, 180.0))
         assertEquals("lat-60_lon-180", Tiles.tileForPosition(-45.0, -179.5))
     }
+
+    @Test
+    fun `tilesIntersecting returns just one tile for a box fully inside it`() {
+        // A small passage-plan area entirely within the Manila tile
+        // (lat0_lon120 spans lat 0-30, lon 120-180) -- kept clear of both
+        // boundaries so it can't accidentally straddle a neighboring tile.
+        val tiles = Tiles.tilesIntersecting(latMin = 10.0, latMax = 15.0, lonMin = 125.0, lonMax = 130.0)
+        assertEquals(listOf("lat0_lon120"), tiles)
+    }
+
+    @Test
+    fun `tilesIntersecting returns every tile a wider box touches, in grid order`() {
+        // A box straddling the lat0/lat30 boundary and the lon60/lon120
+        // boundary should pick up all four surrounding tiles.
+        val tiles = Tiles.tilesIntersecting(latMin = 25.0, latMax = 35.0, lonMin = 115.0, lonMax = 125.0)
+        assertEquals(listOf("lat0_lon60", "lat0_lon120", "lat30_lon60", "lat30_lon120"), tiles)
+    }
+
+    @Test
+    fun `tilesIntersecting returns nothing for a box entirely outside the covered latitude range`() {
+        val tiles = Tiles.tilesIntersecting(latMin = 70.0, latMax = 80.0, lonMin = 0.0, lonMax = 10.0)
+        assertEquals(emptyList<String>(), tiles)
+    }
 }

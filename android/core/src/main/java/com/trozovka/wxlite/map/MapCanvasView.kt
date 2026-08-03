@@ -67,8 +67,8 @@ class MapCanvasView @JvmOverloads constructor(
         color = Color.rgb(90, 90, 90); strokeWidth = 2f; style = Paint.Style.STROKE; isAntiAlias = true
     }
     private val areaPaint = Paint().apply {
-        color = Color.BLACK; strokeWidth = 3f; style = Paint.Style.STROKE; isAntiAlias = true
-        pathEffect = android.graphics.DashPathEffect(floatArrayOf(18f, 10f), 0f)
+        color = Color.BLACK; strokeWidth = 1.5f; style = Paint.Style.STROKE; isAntiAlias = true
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 8f), 0f)
     }
     private val areaVertexPaint = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL; isAntiAlias = true }
     private val areaLabelPaint = Paint().apply {

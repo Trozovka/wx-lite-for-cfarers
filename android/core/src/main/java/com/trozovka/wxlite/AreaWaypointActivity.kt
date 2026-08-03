@@ -2,6 +2,7 @@ package com.trozovka.wxlite
 
 import android.app.Activity
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import android.text.Editable
 import android.text.InputFilter
@@ -65,10 +66,17 @@ class AreaWaypointActivity : Activity() {
         val existing = areaStore.get()
         for (i in 0 until AreaStore.MAX_POINTS) {
             root.addView(buildRow(i + 1, existing.getOrNull(i)))
+            // Thin divider between rows -- a plain View used as a 1px
+            // rule, giving the row-per-point layout a spreadsheet-like
+            // grid feel without pulling in a table-layout dependency.
+            root.addView(
+                android.view.View(this).apply { setBackgroundColor(Color.rgb(220, 220, 220)) },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 2),
+            )
         }
 
         val saveBtn = Button(this).apply {
-            text = "Save"
+            text = "Save and back to main"
             setOnClickListener { onSaveClicked() }
         }
         root.addView(saveBtn)

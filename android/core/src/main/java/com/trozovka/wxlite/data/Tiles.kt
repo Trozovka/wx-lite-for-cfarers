@@ -36,4 +36,30 @@ object Tiles {
 
         return "lat${tileLat}_lon${tileLon}"
     }
+
+    /** Every tile whose bounds overlap the given lat/lon box -- used to
+     * sync a whole passage-plan area (typically 1-4 tiles) in one action,
+     * rather than only the single tile under the crosshair. Does not
+     * handle a box that crosses the +/-180 antimeridian (lonMin must be
+     * <= lonMax); a passage plan spanning that line is a known
+     * simplification, not handled here. */
+    fun tilesIntersecting(latMin: Double, latMax: Double, lonMin: Double, lonMax: Double): List<String> {
+        val result = mutableListOf<String>()
+        var lat = LAT_RANGE.first
+        while (lat < LAT_RANGE.last) {
+            val tileLatMax = lat + TILE_LAT_SIZE
+            if (tileLatMax > latMin && lat < latMax) {
+                var lon = LON_RANGE.first
+                while (lon < LON_RANGE.last) {
+                    val tileLonMax = lon + TILE_LON_SIZE
+                    if (tileLonMax > lonMin && lon < lonMax) {
+                        result.add("lat${lat}_lon${lon}")
+                    }
+                    lon += TILE_LON_SIZE
+                }
+            }
+            lat += TILE_LAT_SIZE
+        }
+        return result
+    }
 }

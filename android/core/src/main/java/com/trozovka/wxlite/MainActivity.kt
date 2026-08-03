@@ -1,6 +1,7 @@
 package com.trozovka.wxlite
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
@@ -81,38 +82,33 @@ class MainActivity : Activity() {
         }
         topPanel.addView(setAreaBtn)
 
-        // Syncs only the tile under the crosshair (wherever the map is
-        // currently centered) -- ~150KB for a full 10-day forecast
-        // (measured against the real published data), vs. ~3.6MB for all
-        // 24 world tiles. On a Marlink-class satellite link that gap is
-        // the difference between a routine sync and one that could take a
-        // very long time or cost real money, so this stays scoped to one
-        // region at a time. To check a different region (e.g. home, while
-        // sailing elsewhere), pan the crosshair there and Sync now again
-        // -- each synced region stays cached and rendered afterward.
+        // Syncs every tile the passage-plan area's bounding box touches
+        // (typically 1-4 tiles for a normal-sized voyage leg), so the
+        // forecast covers as much of the actual area as the region grid
+        // allows -- falls back to just the tile under the crosshair if no
+        // area is set yet. Each tile is ~150KB for a full 10-day forecast
+        // (measured against the real published data); still a single
+        // explicit tap, never automatic, and still bounded (not "sync the
+        // whole 24-tile world," which was tried and reverted earlier for
+        // taking too long/using too much data on a slow link).
         val syncBtn = Button(this).apply {
             text = "Sync now"
             setOnClickListener {
-                text = "Syncing..."
-                isEnabled = false
-                val (lat, lon) = mapView.currentCenterLatLon()
-                val tileId = Tiles.tileForPosition(lat, lon)
-                if (tileId == null) {
-                    text = "Sync now"
-                    isEnabled = true
+                val tileIds = tileIdsToSync()
+                if (tileIds.isEmpty()) {
                     statusView.text = "Crosshair is outside covered range (60°S-60°N)."
                 } else {
-                    repository.sync(tileId) {
-                        runOnUiThread {
-                            text = "Sync now"
-                            isEnabled = true
-                            refreshStatus()
-                        }
-                    }
+                    syncTiles(this, tileIds)
                 }
             }
         }
         topPanel.addView(syncBtn)
+
+        val aboutBtn = Button(this).apply {
+            text = "About"
+            setOnClickListener { showAboutDialog() }
+        }
+        topPanel.addView(aboutBtn)
 
         statusView = TextView(this).apply { textSize = 12f }
         topPanel.addView(statusView)
@@ -189,6 +185,61 @@ class MainActivity : Activity() {
     private fun updateCrosshairLabel() {
         val (lat, lon) = mapView.currentCenterLatLon()
         crosshairLabel.text = "Lat = ${Coordinates.formatLat(lat)}, Lon = ${Coordinates.formatLon(lon)}"
+    }
+
+    /** Prefers every tile the passage-plan area's bounding box touches;
+     * falls back to the single tile under the crosshair if no area is
+     * set (or the area's box happens to fall outside the covered range). */
+    private fun tileIdsToSync(): List<String> {
+        val points = areaStore.get().filterNotNull()
+        if (points.isNotEmpty()) {
+            val latMin = points.minOf { it.lat }
+            val latMax = points.maxOf { it.lat }
+            val lonMin = points.minOf { it.lon }
+            val lonMax = points.maxOf { it.lon }
+            val areaTiles = Tiles.tilesIntersecting(latMin, latMax, lonMin, lonMax)
+            if (areaTiles.isNotEmpty()) return areaTiles
+        }
+        val (lat, lon) = mapView.currentCenterLatLon()
+        return listOfNotNull(Tiles.tileForPosition(lat, lon))
+    }
+
+    private fun syncTiles(button: Button, tileIds: List<String>) {
+        button.isEnabled = false
+        val total = tileIds.size
+        var completed = 0
+        button.text = if (total > 1) "Syncing 0/$total..." else "Syncing..."
+        for (tileId in tileIds) {
+            repository.sync(tileId) {
+                runOnUiThread {
+                    completed++
+                    if (completed < total) {
+                        button.text = "Syncing $completed/$total..."
+                    } else {
+                        button.text = "Sync now"
+                        button.isEnabled = true
+                        refreshStatus()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showAboutDialog() {
+        val tierLabel = when (intent.getStringExtra(EXTRA_TIER)) {
+            "PAID" -> "Pro — 10-day forecast"
+            else -> "Lite — 1-day forecast"
+        }
+        val message = "Trozovka WX $tierLabel\n\n" +
+            "An ultra-lightweight offline weather chart for ships on slow satellite " +
+            "internet: wind, pressure, and typhoon data from NOAA, rendered entirely " +
+            "on-device from a small compressed file, no map tiles or images downloaded.\n\n" +
+            "By Trozovka\nhttps://github.com/Trozovka"
+        AlertDialog.Builder(this)
+            .setTitle("About")
+            .setMessage(message)
+            .setPositiveButton("Close", null)
+            .show()
     }
 
     private fun stepHour(delta: Int) {

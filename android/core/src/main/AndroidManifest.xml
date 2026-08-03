@@ -1,15 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Component declarations only, no launcher intent-filter here,
-         since which Activity is the launcher differs per app (the free
-         app launches MainActivity directly; the paid app launches its own
-         LicenseGateActivity first). Declaring these here means an app
-         module depending on :core doesn't need to manually re-declare
-         every shared Activity in its own manifest as :core grows. -->
+    <!--
+    Fully-qualified name, deliberately not relative (".AreaWaypointActivity"):
+    a relative name here resolves against THIS manifest's own namespace
+    (com.trozovka.wxlite.core, per core/build.gradle.kts), not the actual
+    class package (com.trozovka.wxlite). Using a relative name previously,
+    silently created a manifest entry for a class that doesn't exist,
+    confirmed via aapt dump xmltree on a real built APK: a real bug, not
+    a hypothetical one.
+
+    MainActivity is NOT declared here, deliberately: its exported and
+    launcher-intent-filter attributes genuinely differ per app (the free
+    app launches it directly, exported true; the paid app launches it
+    only via explicit Intent after its own license gate, exported
+    false), so each app module still declares MainActivity in its own
+    manifest rather than fighting a shared declaration here.
+    -->
     <application>
-        <activity android:name=".MainActivity" android:exported="false" />
-        <activity android:name=".AreaWaypointActivity" android:exported="false" />
+        <activity android:name="com.trozovka.wxlite.AreaWaypointActivity" android:exported="false" />
     </application>
 
 </manifest>
