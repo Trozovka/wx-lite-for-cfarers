@@ -220,7 +220,12 @@ class MainActivity : Activity() {
             "PAID" -> "Pro — 10-day forecast"
             else -> "Lite — 1-day forecast"
         }
-        val message = "Trozovka WX $tierLabel\n\n" +
+        val versionName = try {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        } catch (e: Exception) {
+            "unknown"
+        }
+        val message = "Trozovka WX $tierLabel — v$versionName\n\n" +
             "An ultra-lightweight offline weather chart for ships on slow satellite " +
             "internet: wind, pressure, and typhoon data from NOAA, rendered entirely " +
             "on-device from a small compressed file, no map tiles or images downloaded.\n\n" +
