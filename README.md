@@ -19,7 +19,7 @@ Built independently, not a fork — no closely-matching open-source project was 
 
 ## Download
 
-The easiest way to get the app: grab the latest APK from [GitHub Releases](https://github.com/Trozovka/wx-lite-for-cfarers/releases) and sideload it (this app is not distributed via Play Store — see Setup below for why, and for how to allow the install). Building from source (below) is the alternative if you'd rather compile it yourself.
+The easiest way to get the app: grab the APK from [GitHub Releases](https://github.com/Trozovka/wx-lite-for-cfarers/releases) or [Gumroad](https://trozovka.gumroad.com/l/wx-lite-for-seafarers) (free) and sideload it (this app is not distributed via Play Store — see Setup below for why, and for how to allow the install). Building from source (below) is the alternative if you'd rather compile it yourself.
 
 ## Setup and running
 
@@ -79,7 +79,7 @@ _A screenshot of the main chart view belongs here — not yet added._
 
 ## Paid version
 
-A private companion app, `wx-pro-for-cfarers`, extends this core with the full 10-day forecast. It is closed-source and distributed separately; this repository contains no paid-tier code.
+A private companion app, `wx-pro-for-cfarers`, extends this core with the full 10-day forecast — [WX Pro for Seafarers on Gumroad](https://trozovka.gumroad.com/l/wx-pro-for-seafarers). It is closed-source and distributed separately; this repository contains no paid-tier code.
 
 ## License
 
