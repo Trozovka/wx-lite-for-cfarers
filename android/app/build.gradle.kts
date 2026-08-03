@@ -1,3 +1,19 @@
+import java.util.Properties
+
+// Release signing: read from local.properties (gitignored) or environment
+// variables, never hardcoded -- same pattern as wx-pro-for-cfarers. The
+// keystore itself lives outside this repo entirely. Falls back to
+// unsigned if not configured on a given machine, so ./gradlew test and
+// similar still work without a keystore present.
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val releaseKeystorePath = localProps.getProperty("RELEASE_KEYSTORE_PATH") ?: System.getenv("RELEASE_KEYSTORE_PATH")
+val releaseKeystorePassword = localProps.getProperty("RELEASE_KEYSTORE_PASSWORD") ?: System.getenv("RELEASE_KEYSTORE_PASSWORD")
+val releaseKeyAlias = localProps.getProperty("RELEASE_KEY_ALIAS") ?: System.getenv("RELEASE_KEY_ALIAS")
+val releaseKeyPassword = localProps.getProperty("RELEASE_KEY_PASSWORD") ?: System.getenv("RELEASE_KEY_PASSWORD")
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -15,13 +31,25 @@ android {
         minSdk = 21
         targetSdk = 34
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "1.0.0"
+    }
+
+    signingConfigs {
+        if (releaseKeystorePath != null && releaseKeystorePassword != null && releaseKeyAlias != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword ?: releaseKeystorePassword
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
 

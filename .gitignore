@@ -13,6 +13,11 @@ captures/
 *.apk
 *.aab
 
+# Release signing -- never committed, ever.
+*.keystore
+*.jks
+keystore-DO-NOT-COMMIT/
+
 # Backend (Python)
 __pycache__/
 *.pyc

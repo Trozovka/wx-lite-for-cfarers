@@ -17,6 +17,10 @@ Ships on Marlink-class connections pay per megabyte and get very little of it. C
 
 Built independently, not a fork — no closely-matching open-source project was found to build on (see `PROJECT_SPEC.md` Section 5).
 
+## Download
+
+The easiest way to get the app: grab the latest APK from [GitHub Releases](https://github.com/Trozovka/wx-lite-for-cfarers/releases) and sideload it (this app is not distributed via Play Store — see Setup below for why, and for how to allow the install). Building from source (below) is the alternative if you'd rather compile it yourself.
+
 ## Setup and running
 
 ### Android app
@@ -65,13 +69,13 @@ Runs automatically on a schedule via `.github/workflows/build-weather-data.yml`;
 
 - 1-day weather forecast: wind (speed, direction, traditional wind barbs, Beaufort force 5 and above only), pressure systems (H/L markers with central pressure, isobars every 4 hPa), tropical cyclone positions, low-pressure movement arrows.
 - Full-screen pan/zoom map (no map tile downloads) with a 1-degree lat/lon reference grid and a fixed-center crosshair that reads out the exact lat/lon under it.
-- Passage-plan area: up to 10 waypoints (degrees-minutes, the maritime convention) connected in order to outline the area relevant to a voyage.
+- Passage-plan area: up to 10 waypoints (degrees-minutes, the maritime convention) connected in order to outline the area relevant to a voyage — with per-point and clear-all controls.
 - Forecast hour picker (Earlier/Later) showing each hour's actual valid UTC date/time.
-- Fully offline after syncing — the forecast and passage-plan area are stored on-device; only the explicit "Sync now" action touches the network.
+- Fully offline after syncing — the forecast and passage-plan area are stored on-device; only the explicit "Sync now" action touches the network. A "Clear cache" option is available if you want to free up storage or force a completely fresh sync.
 
 ## Screenshot
 
-_Not yet added — a screenshot of the main chart view (coastline, isobars, wind barbs, passage-plan area) belongs here._
+_A screenshot of the main chart view belongs here — not yet added._
 
 ## Paid version
 
