@@ -74,4 +74,20 @@ class WindBarbTest {
         assertEquals(20, barb.speedKnots)
         assertEquals(45.0, barb.fromDirectionDeg, 0.5)
     }
+
+    @Test
+    fun `trueSpeedKnots preserves the unrounded speed, unlike the 5kt-rounded barb speedKnots`() {
+        // 16.6kt rounds to 15kt for barb-drawing purposes (nearest 5),
+        // but Beaufort classification must see the real 16.6 -- confirmed
+        // during an accuracy audit that using the rounded value instead
+        // shifts a real wind speed into the wrong Beaufort force (16.6kt
+        // is force 5, but reading back from a 15kt rounding gives force 4).
+        val barb = WindBarb.fromComponents(0.0, -16.6 * knotsToMs)
+        assertEquals(15, barb.speedKnots)
+        assertEquals(16.6, barb.trueSpeedKnots, 0.05)
+        assertEquals(5, Beaufort.forceForKnots(barb.trueSpeedKnots))
+        // The bug this guards against: force 4 is what you'd wrongly get
+        // from the rounded speed instead.
+        assertEquals(4, Beaufort.forceForKnots(barb.speedKnots.toDouble()))
+    }
 }

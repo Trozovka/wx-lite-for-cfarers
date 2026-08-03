@@ -1,19 +1,18 @@
 package com.trozovka.wxlite
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
-import android.text.InputType
 import android.view.Gravity
 import android.widget.Button
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
+import com.trozovka.wxlite.chart.Coordinates
+import com.trozovka.wxlite.data.AreaStore
 import com.trozovka.wxlite.data.ForecastRepository
 import com.trozovka.wxlite.data.ForecastTier
-import com.trozovka.wxlite.data.LocationStore
 import com.trozovka.wxlite.data.Tiles
 import com.trozovka.wxlite.map.MapCanvasView
 import java.text.SimpleDateFormat
@@ -21,10 +20,11 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Full-screen pan/zoom map (MapCanvasView) with two thin overlay panels:
- * lat/lon entry top-left, forecast date/time (Earlier/Later) at the
- * bottom. Offline-first flow unchanged underneath: saved location -> tile
- * lookup -> read from local cache -> explicit sync updates the cache ->
+ * Full-screen pan/zoom map (MapCanvasView) with a fixed center crosshair
+ * (its exact lat/lon shown above the date/time bar), a passage-plan area
+ * outline (up to 10 waypoints, set on a separate screen), and forecast
+ * date/time controls at the bottom. Offline-first flow unchanged
+ * underneath: read from local cache -> explicit sync updates the cache ->
  * render. Everything shown here works with zero connectivity except the
  * Sync button itself.
  *
@@ -36,15 +36,14 @@ import java.util.Locale
  * launches it explicitly with EXTRA_TIER=PAID after its own license gate.
  */
 class MainActivity : Activity() {
-    private lateinit var locationStore: LocationStore
+    private lateinit var areaStore: AreaStore
     private lateinit var repository: ForecastRepository
     private lateinit var statusView: TextView
     private lateinit var mapView: MapCanvasView
+    private lateinit var crosshairLabel: TextView
     private lateinit var hourLabel: TextView
     private lateinit var prevHourBtn: Button
     private lateinit var nextHourBtn: Button
-    private lateinit var latInput: EditText
-    private lateinit var lonInput: EditText
 
     private var availableHours: List<Int> = emptyList()
     private var currentHourIndex: Int = 0
@@ -57,75 +56,51 @@ class MainActivity : Activity() {
             else -> ForecastTier.FREE
         }
 
-        locationStore = LocationStore(this)
+        areaStore = AreaStore(this)
         repository = ForecastRepository(this, tier)
 
         val root = FrameLayout(this)
 
         mapView = MapCanvasView(this)
         root.addView(mapView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        mapView.onViewportChanged = { updateCrosshairLabel() }
 
-        // Top-left: lat/lon entry, defaulted to the same Manila coordinates
-        // as before, so the fields double as a worked example of correct
-        // input format. Overlaid on the map, not a layout row competing
-        // with it for vertical space (that's what broke in landscape).
+        // Top-left: opens the passage-plan area screen (10 waypoints) and
+        // syncs the tile currently under the crosshair.
         val topPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 64, 24, 16)
             setBackgroundColor(Color.argb(200, 255, 255, 255))
         }
 
-        val latLonRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        latInput = EditText(this).apply {
-            hint = "Lat"
-            setText(MANILA_LAT.toString())
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or
-                InputType.TYPE_NUMBER_FLAG_SIGNED
-        }
-        lonInput = EditText(this).apply {
-            hint = "Lon"
-            setText(MANILA_LON.toString())
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or
-                InputType.TYPE_NUMBER_FLAG_SIGNED
-        }
-        val setLocationBtn = Button(this).apply {
-            text = "Set"
+        val setAreaBtn = Button(this).apply {
+            text = "Set Passage Area (10 pts)"
             setOnClickListener {
-                val lat = latInput.text.toString().toDoubleOrNull()
-                val lon = lonInput.text.toString().toDoubleOrNull()
-                if (lat == null || lon == null || lat !in -90.0..90.0 || lon !in -180.0..180.0) {
-                    Toast.makeText(this@MainActivity, "Enter a valid lat (-90..90) and lon (-180..180)", Toast.LENGTH_SHORT).show()
-                } else {
-                    setLocation(lat, lon)
-                }
+                startActivityForResult(Intent(this@MainActivity, AreaWaypointActivity::class.java), REQUEST_SET_AREA)
             }
         }
-        latLonRow.addView(latInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        latLonRow.addView(lonInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        latLonRow.addView(setLocationBtn)
-        topPanel.addView(latLonRow)
+        topPanel.addView(setAreaBtn)
 
-        // Syncs only the tile for the current saved position -- ~150KB for
-        // a full 10-day forecast (measured against the real published
-        // data), vs. ~3.6MB for all 24 world tiles. On a Marlink-class
-        // satellite link that gap is the difference between a routine sync
-        // and one that could take a very long time or cost real money, so
-        // this stays scoped to one region at a time. To check a different
-        // region (e.g. home, while sailing elsewhere), type its
-        // coordinates into the fields above, hit Set, then Sync now again
-        // -- each synced region stays cached and rendered afterward, so
-        // multiple regions accumulate rather than replacing each other.
+        // Syncs only the tile under the crosshair (wherever the map is
+        // currently centered) -- ~150KB for a full 10-day forecast
+        // (measured against the real published data), vs. ~3.6MB for all
+        // 24 world tiles. On a Marlink-class satellite link that gap is
+        // the difference between a routine sync and one that could take a
+        // very long time or cost real money, so this stays scoped to one
+        // region at a time. To check a different region (e.g. home, while
+        // sailing elsewhere), pan the crosshair there and Sync now again
+        // -- each synced region stays cached and rendered afterward.
         val syncBtn = Button(this).apply {
             text = "Sync now"
             setOnClickListener {
                 text = "Syncing..."
                 isEnabled = false
-                val position = locationStore.get()
-                val tileId = position?.let { Tiles.tileForPosition(it.lat, it.lon) }
+                val (lat, lon) = mapView.currentCenterLatLon()
+                val tileId = Tiles.tileForPosition(lat, lon)
                 if (tileId == null) {
-                    Toast.makeText(this@MainActivity, "Set a location first.", Toast.LENGTH_SHORT).show()
                     text = "Sync now"
                     isEnabled = true
+                    statusView.text = "Crosshair is outside covered range (60°S-60°N)."
                 } else {
                     repository.sync(tileId) {
                         runOnUiThread {
@@ -149,18 +124,21 @@ class MainActivity : Activity() {
             },
         )
 
-        // Bottom: forecast date/time, the sole bottom control per spec —
-        // lat/lon now lives in topPanel instead of a four-field bottom row.
-        // The label gets its own full-width row (not squeezed between the
-        // two buttons horizontally) -- in portrait, the buttons previously
-        // left so little width that the date/time string wrapped and cut
-        // off mid-word (e.g. "UTC"); a full-width row can't do that on any
-        // orientation.
+        // Bottom: crosshair position, then forecast date/time -- the
+        // crosshair readout sits directly above the date/time row, same
+        // font size, both inside one bottom panel.
         val bottomBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 16, 16, 32)
             setBackgroundColor(Color.argb(200, 255, 255, 255))
         }
+
+        crosshairLabel = TextView(this).apply {
+            textSize = 14f
+            gravity = Gravity.CENTER
+        }
+        bottomBar.addView(crosshairLabel, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
         hourLabel = TextView(this).apply {
             textSize = 14f
             gravity = Gravity.CENTER
@@ -188,12 +166,29 @@ class MainActivity : Activity() {
         )
 
         setContentView(root)
+        loadArea(recenterOnPointOne = true)
+        updateCrosshairLabel()
         refreshStatus()
     }
 
-    private fun setLocation(lat: Double, lon: Double) {
-        locationStore.save(lat, lon)
-        refreshStatus()
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_SET_AREA) {
+            loadArea(recenterOnPointOne = true)
+        }
+    }
+
+    private fun loadArea(recenterOnPointOne: Boolean) {
+        val points = areaStore.get()
+        mapView.setArea(points)
+        if (recenterOnPointOne) {
+            points.firstOrNull()?.let { mapView.centerOn(it.lat, it.lon) }
+        }
+    }
+
+    private fun updateCrosshairLabel() {
+        val (lat, lon) = mapView.currentCenterLatLon()
+        crosshairLabel.text = "Lat = ${Coordinates.formatLat(lat)}, Lon = ${Coordinates.formatLon(lon)}"
     }
 
     private fun stepHour(delta: Int) {
@@ -203,16 +198,6 @@ class MainActivity : Activity() {
     }
 
     private fun refreshStatus() {
-        val position = locationStore.get()
-        mapView.setMarker(position?.lat, position?.lon)
-
-        // Forecast browsing (hours, wind/pressure tiles) is worldwide and
-        // doesn't require a saved location at all -- only the marker and
-        // the initial camera position do.
-        if (position != null) {
-            mapView.centerOn(position.lat, position.lon)
-        }
-
         availableHours = repository.availableHoursAnyTile()
         currentHourIndex = currentHourIndex.coerceIn(0, (availableHours.size - 1).coerceAtLeast(0))
 
@@ -222,8 +207,7 @@ class MainActivity : Activity() {
         } else {
             "never"
         }
-        val positionText = if (position != null) "Marker: ${position.lat}, ${position.lon} | " else ""
-        statusView.text = "${positionText}Cached tiles: ${repository.cachedTileIds().size}/24 | " +
+        statusView.text = "Cached tiles: ${repository.cachedTileIds().size}/24 | " +
             "Hours: ${availableHours.size} | Synced: $syncText"
 
         mapView.setStorms(repository.cachedStormsList())
@@ -247,7 +231,7 @@ class MainActivity : Activity() {
 
         val hour = availableHours[currentHourIndex]
         // Render every tile that's been synced for this hour, across the
-        // whole world, not just whichever tile the lat/lon fields point to.
+        // whole world, not just whichever tile the crosshair is over.
         val tilesForHour = repository.cachedFilesForHour(hour)
         mapView.setTiles(tilesForHour.values.toList())
 
@@ -269,9 +253,6 @@ class MainActivity : Activity() {
         /** Intent extra: "PAID" or "FREE" (default when absent). */
         const val EXTRA_TIER = "com.trozovka.wxlite.EXTRA_TIER"
 
-        // Same worked-example position used as the default lat/lon input
-        // values — kept as one named constant so the two can't drift.
-        private const val MANILA_LAT = 14.6
-        private const val MANILA_LON = 121.0
+        private const val REQUEST_SET_AREA = 1001
     }
 }

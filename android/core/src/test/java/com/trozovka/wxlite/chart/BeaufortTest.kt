@@ -35,4 +35,12 @@ class BeaufortTest {
     fun `negative input is treated as calm rather than throwing`() {
         assertEquals(0, Beaufort.forceForKnots(-5.0))
     }
+
+    @Test
+    fun `forces below 5 are not significant, 5 and above are`() {
+        assertEquals(false, Beaufort.isSignificant(0))
+        assertEquals(false, Beaufort.isSignificant(4))
+        assertEquals(true, Beaufort.isSignificant(5))
+        assertEquals(true, Beaufort.isSignificant(12))
+    }
 }

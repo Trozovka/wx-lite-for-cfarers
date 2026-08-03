@@ -13,27 +13,28 @@ import android.view.ScaleGestureDetector
 import android.view.View
 import com.trozovka.wxlite.chart.Beaufort
 import com.trozovka.wxlite.chart.CenterType
+import com.trozovka.wxlite.chart.Coordinates
 import com.trozovka.wxlite.chart.Isobars
 import com.trozovka.wxlite.chart.PressureCenters
 import com.trozovka.wxlite.chart.Storm
 import com.trozovka.wxlite.chart.Storms
 import com.trozovka.wxlite.chart.WindBarb
 import com.trozovka.wxlite.chart.WindBarbSymbol
+import com.trozovka.wxlite.data.AreaPoint
 import com.trozovka.wxlite.data.WxlFile
 import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Full-screen, pannable, pinch-zoomable map: coastlines (bundled Natural
- * Earth data) plus a wind field (barbs + Beaufort force) and cyclone
- * markers drawn as an overlay on top. Deliberately NOT a tile-streaming
- * basemap (no osmdroid/Mapbox/Maps SDK) — panning and zooming are a pure
- * local Canvas transform (MapTransform) over data already on disk. Nothing
- * is fetched by panning; only an explicit sync touches the network.
- *
- * Replaces the old fixed-size ChartCanvasView + orthographic GlobeView,
- * which real device testing showed were the wrong interaction model
- * (small fixed panel, no zoom/pan, broken in landscape).
+ * Full-screen, pannable, pinch-zoomable map: a 1-degree lat/lon grid,
+ * coastlines (bundled Natural Earth data), the passage-plan area outline,
+ * a wind field (barbs + Beaufort force, F5 and above only), pressure
+ * (isobars + H/L), and cyclone markers -- plus a fixed-center crosshair
+ * that always reads out the exact lat/lon under it. Deliberately NOT a
+ * tile-streaming basemap (no osmdroid/Mapbox/Maps SDK) -- panning and
+ * zooming are a pure local Canvas transform (MapTransform) over data
+ * already on disk. Nothing is fetched by panning; only an explicit sync
+ * touches the network.
  */
 class MapCanvasView @JvmOverloads constructor(
     context: Context,
@@ -46,11 +47,32 @@ class MapCanvasView @JvmOverloads constructor(
     private var coastline: List<CoastlinePolygon>? = null
     private var tiles: List<WxlFile> = emptyList()
     private var storms: List<Storm> = emptyList()
-    private var markerLatLon: Pair<Double, Double>? = null
+    private var areaPoints: List<AreaPoint?> = emptyList()
+
+    /** Fires whenever the viewport (pan/zoom/programmatic recenter)
+     * changes, i.e. whenever the crosshair's lat/lon reading would be
+     * stale -- the caller re-reads [currentCenterLatLon] and updates its
+     * own on-screen label instead of this view drawing that text itself,
+     * since the label lives in the bottom bar alongside the date/time. */
+    var onViewportChanged: (() -> Unit)? = null
 
     private val backgroundPaint = Paint().apply { color = Color.WHITE; style = Paint.Style.FILL }
+    private val gridPaint = Paint().apply {
+        color = Color.rgb(210, 210, 210); strokeWidth = 1f; style = Paint.Style.STROKE; isAntiAlias = true
+    }
+    private val gridLabelPaint = Paint().apply {
+        color = Color.rgb(130, 130, 130); textSize = 18f; isAntiAlias = true
+    }
     private val coastlinePaint = Paint().apply {
         color = Color.rgb(90, 90, 90); strokeWidth = 2f; style = Paint.Style.STROKE; isAntiAlias = true
+    }
+    private val areaPaint = Paint().apply {
+        color = Color.BLACK; strokeWidth = 3f; style = Paint.Style.STROKE; isAntiAlias = true
+        pathEffect = android.graphics.DashPathEffect(floatArrayOf(18f, 10f), 0f)
+    }
+    private val areaVertexPaint = Paint().apply { color = Color.BLACK; style = Paint.Style.FILL; isAntiAlias = true }
+    private val areaLabelPaint = Paint().apply {
+        color = Color.BLACK; textSize = 22f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
     private val windBarbPaint = Paint().apply {
         color = Color.BLACK; strokeWidth = 3f; style = Paint.Style.STROKE; isAntiAlias = true
@@ -76,8 +98,8 @@ class MapCanvasView @JvmOverloads constructor(
     private val stormLabelPaint = Paint().apply {
         color = Color.BLACK; textSize = 30f; isAntiAlias = true; textAlign = Paint.Align.CENTER
     }
-    private val markerPaint = Paint().apply {
-        color = Color.BLACK; strokeWidth = 5f; style = Paint.Style.STROKE; isAntiAlias = true
+    private val crosshairPaint = Paint().apply {
+        color = Color.BLACK; strokeWidth = 2f; style = Paint.Style.STROKE; isAntiAlias = true
     }
 
     // Barbs were reported as "almost invisible" on a real device -- ~65%
@@ -90,18 +112,24 @@ class MapCanvasView @JvmOverloads constructor(
     // Minimum on-screen spacing between wind barbs/Beaufort labels, in
     // pixels -- the stride actually used is derived from this and the
     // current zoom (see strideFor), so labels stay readable instead of
-    // piling up at low zoom or wastefully sparse at high zoom. Widened
-    // further per feedback that the chart still felt cluttered.
+    // piling up at low zoom or wastefully sparse at high zoom.
     private val minLabelSpacingPx = 130.0
+
+    // Fixed screen-space radius -- deliberately NOT multiplied by
+    // transform.scale anywhere, so the crosshair stays the same size
+    // regardless of zoom level. Per operator direction: if the user wants
+    // a more precise position, they zoom in; the crosshair itself is not
+    // the precision control.
+    private val crosshairRadiusPx = 14f
 
     private val scaleDetector = ScaleGestureDetector(context, ScaleListener())
     private val panDetector = GestureDetector(context, PanListener())
 
     /** Renders wind + pressure for every tile passed in -- callers should
-     * pass every cached tile for the selected hour, not just the tile
-     * nearest the ship, so panning shows data anywhere that's actually
-     * been synced (the "camera" here only decides what's visible, per the
-     * world/viewport distinction; it doesn't limit what data exists). */
+     * pass every cached tile for the selected hour, not just one region,
+     * so panning shows data anywhere that's actually been synced (the
+     * "camera" here only decides what's visible, it doesn't limit what
+     * data exists). */
     fun setTiles(newTiles: List<WxlFile>) {
         tiles = newTiles
         invalidate()
@@ -112,13 +140,18 @@ class MapCanvasView @JvmOverloads constructor(
         invalidate()
     }
 
-    /** Marks a specific lat/lon with a fixed crosshair, independent of
-     * where the camera is currently centered -- entering coordinates is
-     * just a "guide" to a location; the pin needs to stay put and stay
-     * visible even after the user pans elsewhere. Pass null to clear it. */
-    fun setMarker(latDeg: Double?, lonDeg: Double?) {
-        markerLatLon = if (latDeg != null && lonDeg != null) Pair(latDeg, lonDeg) else null
+    /** Up to 10 waypoints (nulls for skipped rows) outlining the
+     * passage-plan area, connected in order. */
+    fun setArea(points: List<AreaPoint?>) {
+        areaPoints = points
         invalidate()
+    }
+
+    /** The lat/lon currently under the fixed center crosshair -- the
+     * inverse of the world/screen projection used for every drawn layer. */
+    fun currentCenterLatLon(): Pair<Double, Double> {
+        val (worldX, worldY) = transform.screenToWorld(width / 2.0, height / 2.0)
+        return Pair(-worldY, worldX) // inverse of worldOf: lat = -worldY, lon = worldX
     }
 
     /** Recenters the map on (lat, lon) without changing the current zoom level. */
@@ -137,6 +170,7 @@ class MapCanvasView @JvmOverloads constructor(
             translateY = height / 2.0 - worldY * transform.scale,
         )
         invalidate()
+        onViewportChanged?.invoke()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -160,29 +194,95 @@ class MapCanvasView @JvmOverloads constructor(
     /** World space: plain equirectangular degrees, north up (screen Y grows down, so lat is negated). */
     private fun worldOf(latDeg: Double, lonDeg: Double): Pair<Double, Double> = Pair(lonDeg, -latDeg)
 
+    private fun screenOf(latDeg: Double, lonDeg: Double): Pair<Float, Float> {
+        val (wx, wy) = worldOf(latDeg, lonDeg)
+        val (sx, sy) = transform.worldToScreen(wx, wy)
+        return Pair(sx.toFloat(), sy.toFloat())
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (width == 0 || height == 0) return
         ensureCoastlineLoaded()
 
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), backgroundPaint)
+        drawGrid(canvas)
         drawCoastline(canvas)
+        drawArea(canvas)
         drawPressure(canvas)
         drawWind(canvas)
         drawStorms(canvas)
-        drawMarker(canvas)
+        drawCrosshair(canvas)
     }
 
-    private fun drawMarker(canvas: Canvas) {
-        val (lat, lon) = markerLatLon ?: return
-        val (worldX, worldY) = worldOf(lat, lon)
-        val (sx, sy) = transform.worldToScreen(worldX, worldY)
-        val x = sx.toFloat()
-        val y = sy.toFloat()
-        val r = 16f
-        canvas.drawCircle(x, y, r, markerPaint)
-        canvas.drawLine(x, y - r * 2.2f, x, y + r * 2.2f, markerPaint)
-        canvas.drawLine(x - r * 2.2f, y, x + r * 2.2f, y, markerPaint)
+    /** 1-degree lat/lon reference grid across whatever's currently visible
+     * -- found by inverse-projecting the four screen corners, not by
+     * iterating the whole world, so it stays cheap regardless of zoom. */
+    private fun drawGrid(canvas: Canvas) {
+        val corners = listOf(
+            transform.screenToWorld(0.0, 0.0),
+            transform.screenToWorld(width.toDouble(), 0.0),
+            transform.screenToWorld(0.0, height.toDouble()),
+            transform.screenToWorld(width.toDouble(), height.toDouble()),
+        )
+        val visibleLonMin = corners.minOf { it.first }.coerceAtLeast(-180.0)
+        val visibleLonMax = corners.maxOf { it.first }.coerceAtMost(180.0)
+        val visibleLatMin = corners.minOf { -it.second }.coerceAtLeast(-90.0)
+        val visibleLatMax = corners.maxOf { -it.second }.coerceAtMost(90.0)
+
+        // Sanity guard: shouldn't happen given MIN_SCALE, but cheap
+        // insurance against ever drawing thousands of lines.
+        if (visibleLonMax - visibleLonMin > 400 || visibleLatMax - visibleLatMin > 200) return
+
+        var lat = Coordinates.floorDegree(visibleLatMin)
+        val latTop = Coordinates.ceilDegree(visibleLatMax)
+        while (lat <= latTop) {
+            val (x1, y1) = screenOf(lat.toDouble(), visibleLonMin)
+            val (x2, y2) = screenOf(lat.toDouble(), visibleLonMax)
+            canvas.drawLine(x1, y1, x2, y2, gridPaint)
+            canvas.drawText("$lat°", 4f, y1 - 4f, gridLabelPaint)
+            lat++
+        }
+
+        var lon = Coordinates.floorDegree(visibleLonMin)
+        val lonRight = Coordinates.ceilDegree(visibleLonMax)
+        while (lon <= lonRight) {
+            val (x1, y1) = screenOf(visibleLatMin, lon.toDouble())
+            val (x2, y2) = screenOf(visibleLatMax, lon.toDouble())
+            canvas.drawLine(x1, y1, x2, y2, gridPaint)
+            canvas.drawText("$lon°", x1 + 4f, 20f, gridLabelPaint)
+            lon++
+        }
+    }
+
+    private fun drawArea(canvas: Canvas) {
+        val filled = areaPoints.mapIndexedNotNull { i, p -> p?.let { Pair(i + 1, it) } }
+        if (filled.isEmpty()) return
+
+        val screenPoints = filled.map { (index, point) -> Pair(index, screenOf(point.lat, point.lon)) }
+
+        if (screenPoints.size >= 2) {
+            for (i in screenPoints.indices) {
+                val (_, a) = screenPoints[i]
+                val (_, b) = screenPoints[(i + 1) % screenPoints.size]
+                canvas.drawLine(a.first, a.second, b.first, b.second, areaPaint)
+            }
+        }
+
+        for ((index, point) in screenPoints) {
+            canvas.drawCircle(point.first, point.second, 10f, areaVertexPaint)
+            canvas.drawText(index.toString(), point.first, point.second - 18f, areaLabelPaint)
+        }
+    }
+
+    /** Fixed screen-space crosshair -- always at the exact view center,
+     * always the same pixel size regardless of zoom. */
+    private fun drawCrosshair(canvas: Canvas) {
+        val cx = width / 2f
+        val cy = height / 2f
+        canvas.drawCircle(cx, cy, crosshairRadiusPx, crosshairPaint)
+        canvas.drawLine(cx, cy - crosshairRadiusPx * 1.8f, cx, cy + crosshairRadiusPx * 1.8f, crosshairPaint)
+        canvas.drawLine(cx - crosshairRadiusPx * 1.8f, cy, cx + crosshairRadiusPx * 1.8f, cy, crosshairPaint)
     }
 
     /** Converts a tile-local grid position (row/col, fractional) to a
@@ -193,9 +293,7 @@ class MapCanvasView @JvmOverloads constructor(
         val lonSpan = file.lonMax - file.lonMin
         val lat = file.latMin + latSpan * row / (file.nLat - 1)
         val lon = file.lonMin + lonSpan * col / (file.nLon - 1)
-        val (worldX, worldY) = worldOf(lat.toDouble(), lon.toDouble())
-        val (sx, sy) = transform.worldToScreen(worldX, worldY)
-        return Pair(sx.toFloat(), sy.toFloat())
+        return screenOf(lat.toDouble(), lon.toDouble())
     }
 
     private fun drawPressure(canvas: Canvas) {
@@ -251,11 +349,9 @@ class MapCanvasView @JvmOverloads constructor(
             val points = polygon.points
             if (points.size < 2) continue
             for (i in 0 until points.size - 1) {
-                val (ax, ay) = worldOf(points[i].lat, points[i].lon)
-                val (bx, by) = worldOf(points[i + 1].lat, points[i + 1].lon)
-                val (sx1, sy1) = transform.worldToScreen(ax, ay)
-                val (sx2, sy2) = transform.worldToScreen(bx, by)
-                canvas.drawLine(sx1.toFloat(), sy1.toFloat(), sx2.toFloat(), sy2.toFloat(), coastlinePaint)
+                val (x1, y1) = screenOf(points[i].lat, points[i].lon)
+                val (x2, y2) = screenOf(points[i + 1].lat, points[i + 1].lon)
+                canvas.drawLine(x1, y1, x2, y2, coastlinePaint)
             }
         }
     }
@@ -275,12 +371,19 @@ class MapCanvasView @JvmOverloads constructor(
             var col = 0
             while (col < file.nLon) {
                 val point = file.pointAt(row, col)
-                val (sx, sy) = tileGridToScreen(file, row.toDouble(), col.toDouble())
-
                 val barb = WindBarb.fromComponents(point.windU.toDouble(), point.windV.toDouble())
-                val force = Beaufort.forceForKnots(barb.speedKnots.toDouble())
-                drawSingleBarb(canvas, sx, sy, barb, "F$force")
-
+                // Classified from the true unrounded speed, not the
+                // 5kt-rounded barb symbol speed -- rounding first can shift
+                // the force by a whole category near a boundary (see
+                // WindBarbSymbol.trueSpeedKnots).
+                val force = Beaufort.forceForKnots(barb.trueSpeedKnots)
+                // Per operator direction: only F5 (fresh breeze) and above
+                // are drawn -- below that clutters the chart without
+                // adding passage-planning-relevant information.
+                if (Beaufort.isSignificant(force)) {
+                    val (sx, sy) = tileGridToScreen(file, row.toDouble(), col.toDouble())
+                    drawSingleBarb(canvas, sx, sy, barb, "F$force")
+                }
                 col += stride
             }
             row += stride
@@ -364,10 +467,7 @@ class MapCanvasView @JvmOverloads constructor(
         // filtering logic, just against the whole world.
         val visible = Storms.withinBounds(storms, latMin = -90.0, latMax = 90.0, lonMin = -180.0, lonMax = 180.0)
         for (storm in visible) {
-            val (worldX, worldY) = worldOf(storm.lat, storm.lon)
-            val (sx, sy) = transform.worldToScreen(worldX, worldY)
-            val x = sx.toFloat()
-            val y = sy.toFloat()
+            val (x, y) = screenOf(storm.lat, storm.lon)
 
             val r = 20f
             canvas.drawCircle(x, y, r, stormPaint)
@@ -396,6 +496,7 @@ class MapCanvasView @JvmOverloads constructor(
                 maxScale = MAX_SCALE,
             )
             invalidate()
+            onViewportChanged?.invoke()
             return true
         }
     }
@@ -409,6 +510,7 @@ class MapCanvasView @JvmOverloads constructor(
             // should move, so it's subtracted directly (not negated again).
             transform = transform.panned(-distanceX.toDouble(), -distanceY.toDouble())
             invalidate()
+            onViewportChanged?.invoke()
             return true
         }
     }

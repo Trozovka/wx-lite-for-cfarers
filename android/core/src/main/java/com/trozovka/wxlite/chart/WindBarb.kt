@@ -12,7 +12,17 @@ import kotlin.math.sqrt
  * barb = 5kt. Below 3kt is drawn as a calm circle, no barbs.
  */
 data class WindBarbSymbol(
+    /** Rounded to the nearest 5kt -- correct for the barb SYMBOL (which is
+     * only ever drawn in 5kt increments by convention), but NOT what
+     * Beaufort force should be classified from -- see [trueSpeedKnots]. */
     val speedKnots: Int,
+    /** Unrounded speed in knots -- Beaufort.forceForKnots must use this,
+     * not [speedKnots]. Rounding to the nearest 5kt before classifying
+     * can shift the result by a whole Beaufort force near a boundary
+     * (e.g. a true 16.6kt wind is force 5, but rounds to 15kt first,
+     * which reads back as force 4) -- confirmed as a real bug, not
+     * theoretical, while auditing this calculation for accuracy. */
+    val trueSpeedKnots: Double,
     val fromDirectionDeg: Double,
     val pennants: Int,
     val fullBarbs: Int,
@@ -36,7 +46,7 @@ object WindBarb {
         val fromDirection = (Math.toDegrees(atan2(-uMetersPerSecond, -vMetersPerSecond)) + 360.0) % 360.0
 
         if (roundedKnots < 3) {
-            return WindBarbSymbol(0, fromDirection, 0, 0, 0, isCalm = true)
+            return WindBarbSymbol(0, speedKnots, fromDirection, 0, 0, 0, isCalm = true)
         }
 
         var remaining = roundedKnots
@@ -46,6 +56,6 @@ object WindBarb {
         remaining %= 10
         val halfBarbs = if (remaining >= 5) 1 else 0
 
-        return WindBarbSymbol(roundedKnots, fromDirection, pennants, fullBarbs, halfBarbs, isCalm = false)
+        return WindBarbSymbol(roundedKnots, speedKnots, fromDirection, pennants, fullBarbs, halfBarbs, isCalm = false)
     }
 }

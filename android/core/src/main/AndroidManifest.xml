@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Component declarations only, no launcher intent-filter here,
+         since which Activity is the launcher differs per app (the free
+         app launches MainActivity directly; the paid app launches its own
+         LicenseGateActivity first). Declaring these here means an app
+         module depending on :core doesn't need to manually re-declare
+         every shared Activity in its own manifest as :core grows. -->
+    <application>
+        <activity android:name=".MainActivity" android:exported="false" />
+        <activity android:name=".AreaWaypointActivity" android:exported="false" />
+    </application>
+
+</manifest>

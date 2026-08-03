@@ -16,4 +16,10 @@ object Beaufort {
         }
         return 12
     }
+
+    /** Per operator direction: below gale-force (F5) is left off the chart
+     * entirely -- barbs/labels for calm-to-fresh-breeze conditions clutter
+     * a chart meant to be read at a glance without adding
+     * passage-planning-relevant information. */
+    fun isSignificant(force: Int): Boolean = force >= 5
 }
