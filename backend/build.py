@@ -62,7 +62,16 @@ def build(tile_filter=None, hour_filter=None, output_dir=OUTPUT_DIR):
                     forecast_hour=hour,
                     bbox=(tile["bottom_lat"], tile["top_lat"], tile["left_lon"], tile["right_lon"]),
                 )
-                pack(grib_path, out_path, step=resolution_step(hour))
+                # Pass the tile's own already-known bounds through to pack()
+                # instead of letting it re-derive them from the GRIB's raw
+                # (0..360-convention, wraparound-unsafe) longitude array --
+                # see pack.py's own docstring for why that was a real bug.
+                pack(
+                    grib_path,
+                    out_path,
+                    step=resolution_step(hour),
+                    bounds=(tile["bottom_lat"], tile["top_lat"], tile["left_lon"], tile["right_lon"]),
+                )
                 manifest["run_time"] = run_time.isoformat()
                 manifest["tiles"][tile["id"]]["files"][str(hour)] = out_name
             finally:
