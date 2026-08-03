@@ -12,6 +12,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import com.trozovka.wxlite.data.ForecastRepository
+import com.trozovka.wxlite.data.ForecastTier
 import com.trozovka.wxlite.data.LocationStore
 import com.trozovka.wxlite.data.Tiles
 import com.trozovka.wxlite.map.MapCanvasView
@@ -27,9 +28,12 @@ import java.util.Locale
  * render. Everything shown here works with zero connectivity except the
  * Sync button itself.
  *
- * Replaces the previous scrolling-column layout (fixed-size chart panel +
- * small globe), which real device testing showed broke in landscape and
- * had no zoom/pan anywhere.
+ * Lives in :core (not the free app's own module) so both wx-lite's free
+ * app and wx-pro's paid app launch the exact same screen instead of
+ * maintaining two copies -- the only difference between tiers is the
+ * [EXTRA_TIER] intent extra, defaulting to FREE when absent (the free
+ * app's manifest launches this directly, with no extras). The paid app
+ * launches it explicitly with EXTRA_TIER=PAID after its own license gate.
  */
 class MainActivity : Activity() {
     private lateinit var locationStore: LocationStore
@@ -48,8 +52,13 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val tier = when (intent.getStringExtra(EXTRA_TIER)) {
+            "PAID" -> ForecastTier.PAID
+            else -> ForecastTier.FREE
+        }
+
         locationStore = LocationStore(this)
-        repository = ForecastRepository(this)
+        repository = ForecastRepository(this, tier)
 
         val root = FrameLayout(this)
 
@@ -257,6 +266,9 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        /** Intent extra: "PAID" or "FREE" (default when absent). */
+        const val EXTRA_TIER = "com.trozovka.wxlite.EXTRA_TIER"
+
         // Same worked-example position used as the default lat/lon input
         // values — kept as one named constant so the two can't drift.
         private const val MANILA_LAT = 14.6
