@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "wx-lite-for-cfarers"
 include(":app")
+include(":core")
