@@ -96,31 +96,33 @@ class MainActivity : Activity() {
         latLonRow.addView(setLocationBtn)
         topPanel.addView(latLonRow)
 
-        // Syncs every tile in the world grid -- the forecast is worldwide,
-        // not tied to wherever the lat/lon fields happen to point, since a
-        // seafarer based in the Philippines but currently in Europe still
-        // wants to check weather back home. Still a single explicit,
-        // user-triggered action (no auto-fetch), just fetching everything
-        // instead of one region at a time.
+        // Syncs only the tile for the current saved position -- ~150KB for
+        // a full 10-day forecast (measured against the real published
+        // data), vs. ~3.6MB for all 24 world tiles. On a Marlink-class
+        // satellite link that gap is the difference between a routine sync
+        // and one that could take a very long time or cost real money, so
+        // this stays scoped to one region at a time. To check a different
+        // region (e.g. home, while sailing elsewhere), type its
+        // coordinates into the fields above, hit Set, then Sync now again
+        // -- each synced region stays cached and rendered afterward, so
+        // multiple regions accumulate rather than replacing each other.
         val syncBtn = Button(this).apply {
             text = "Sync now"
             setOnClickListener {
+                text = "Syncing..."
                 isEnabled = false
-                val allTileIds = Tiles.allTileIds()
-                val total = allTileIds.size
-                var completed = 0
-                text = "Syncing 0/$total..."
-                for (tileId in allTileIds) {
+                val position = locationStore.get()
+                val tileId = position?.let { Tiles.tileForPosition(it.lat, it.lon) }
+                if (tileId == null) {
+                    Toast.makeText(this@MainActivity, "Set a location first.", Toast.LENGTH_SHORT).show()
+                    text = "Sync now"
+                    isEnabled = true
+                } else {
                     repository.sync(tileId) {
                         runOnUiThread {
-                            completed++
-                            if (completed < total) {
-                                text = "Syncing $completed/$total..."
-                            } else {
-                                text = "Sync now"
-                                isEnabled = true
-                                refreshStatus()
-                            }
+                            text = "Sync now"
+                            isEnabled = true
+                            refreshStatus()
                         }
                     }
                 }
