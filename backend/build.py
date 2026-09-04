@@ -57,23 +57,31 @@ def build(tile_filter=None, hour_filter=None, output_dir=OUTPUT_DIR):
             out_path = os.path.join(tile_dir, out_name)
             print(f"[{done}/{total}] tile={tile['id']} hour={hour}", file=sys.stderr)
             try:
-                run_time = fetch(
-                    grib_path,
-                    forecast_hour=hour,
-                    bbox=(tile["bottom_lat"], tile["top_lat"], tile["left_lon"], tile["right_lon"]),
-                )
-                # Pass the tile's own already-known bounds through to pack()
-                # instead of letting it re-derive them from the GRIB's raw
-                # (0..360-convention, wraparound-unsafe) longitude array --
-                # see pack.py's own docstring for why that was a real bug.
-                pack(
-                    grib_path,
-                    out_path,
-                    step=resolution_step(hour),
-                    bounds=(tile["bottom_lat"], tile["top_lat"], tile["left_lon"], tile["right_lon"]),
-                )
-                manifest["run_time"] = run_time.isoformat()
-                manifest["tiles"][tile["id"]]["files"][str(hour)] = out_name
+                try:
+                    run_time = fetch(
+                        grib_path,
+                        forecast_hour=hour,
+                        bbox=(tile["bottom_lat"], tile["top_lat"], tile["left_lon"], tile["right_lon"]),
+                    )
+                    # Pass the tile's own already-known bounds through to pack()
+                    # instead of letting it re-derive them from the GRIB's raw
+                    # (0..360-convention, wraparound-unsafe) longitude array --
+                    # see pack.py's own docstring for why that was a real bug.
+                    pack(
+                        grib_path,
+                        out_path,
+                        step=resolution_step(hour),
+                        bounds=(tile["bottom_lat"], tile["top_lat"], tile["left_lon"], tile["right_lon"]),
+                    )
+                    manifest["run_time"] = run_time.isoformat()
+                    manifest["tiles"][tile["id"]]["files"][str(hour)] = out_name
+                except Exception as e:
+                    # One persistently-unavailable tile/hour (after fetch()'s
+                    # own retries) shouldn't cost the other 647 files a whole
+                    # 6-hour-stale cycle -- skip it, note it, keep going. The
+                    # app treats a missing hour in the manifest as "not
+                    # available yet", not an error.
+                    print(f"  WARNING: skipping tile={tile['id']} hour={hour}: {e}", file=sys.stderr)
             finally:
                 if os.path.exists(grib_path):
                     os.remove(grib_path)

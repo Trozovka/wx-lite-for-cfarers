@@ -7,11 +7,19 @@ first round of bandwidth reduction before pack.py does the second.
 
 import argparse
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import requests
 
 NOMADS_BASE = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
+
+# NOMADS publishes a run's files incrementally over its ~3.5-4.5h availability
+# window; a later forecast hour can still 404 (or return a small HTML error
+# page) minutes after an earlier hour of the same run already succeeded. Most
+# of these clear up within a couple minutes, so retry before giving up.
+MAX_ATTEMPTS = 4
+RETRY_DELAY_SECONDS = 30
 
 # Pressure/wind/temp fields this app needs; see pack.py for how they're used.
 VARS = ["PRMSL", "TMP", "UGRD", "VGRD"]
@@ -47,17 +55,28 @@ def fetch(out_path, forecast_hour=0, bbox=(0, 40, 100, 180), run_time=None):
     for level in LEVELS:
         params[f"lev_{level}"] = "on"
 
-    resp = requests.get(NOMADS_BASE, params=params, timeout=60)
-    resp.raise_for_status()
-    if len(resp.content) < 1000:
-        # NOMADS returns a small HTML error page (not a real GRIB2) for a
-        # run/hour that doesn't exist yet — fail loudly rather than silently
-        # packing garbage.
-        raise RuntimeError(f"Unexpectedly small response ({len(resp.content)} bytes) — run not ready? {resp.url}")
-
-    with open(out_path, "wb") as f:
-        f.write(resp.content)
-    return run_time
+    last_error = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            resp = requests.get(NOMADS_BASE, params=params, timeout=60)
+            resp.raise_for_status()
+            if len(resp.content) < 1000:
+                # NOMADS returns a small HTML error page (not a real GRIB2)
+                # for a run/hour that isn't published yet — treat the same
+                # as a transient failure rather than silently packing garbage.
+                raise RuntimeError(f"Unexpectedly small response ({len(resp.content)} bytes) — run not ready? {resp.url}")
+            with open(out_path, "wb") as f:
+                f.write(resp.content)
+            return run_time
+        except (requests.exceptions.RequestException, RuntimeError) as e:
+            last_error = e
+            if attempt < MAX_ATTEMPTS:
+                print(
+                    f"  fetch attempt {attempt}/{MAX_ATTEMPTS} failed ({e}); retrying in {RETRY_DELAY_SECONDS}s",
+                    file=sys.stderr,
+                )
+                time.sleep(RETRY_DELAY_SECONDS)
+    raise last_error
 
 
 if __name__ == "__main__":
