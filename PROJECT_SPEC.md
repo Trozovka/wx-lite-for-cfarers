@@ -19,7 +19,6 @@ This is the literal feature boundary for everything below — the public repo im
 
 - GitHub account: Trozovka
 - OS and dev environment: Windows 11 + WSL2 Ubuntu
-- Home directory: `/home/trzvk2025`
 - No specific upstream repo supplied — search per Section 5.
 
 ## 3. Autonomy protocol
