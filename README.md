@@ -2,7 +2,7 @@
 
 An ultra-lightweight Android weather app built for merchant ship crews on slow, expensive maritime satellite internet (Marlink and similar) and low-spec Android devices. It's a digital replacement for traditional marine weatherfax: wind (Beaufort force 5 and above), pressure systems (H/L, isobars), and tropical cyclone tracks, rendered locally on-device from a small compressed data file — not streamed map tiles or weather images.
 
-Developed by **[Trozovka](https://github.com/Trozovka) (John Winsome Munar)**, a maritime instructor.
+Developed by **[Trozovka](https://github.com/Trozovka) (John Winsome Munar)**, a Master Mariner.
 
 This is the free, open-source core. It shows a **1-day forecast**. A paid companion app (10-day forecast) depends on this core but is not part of this repo.
 
